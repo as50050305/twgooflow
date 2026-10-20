@@ -400,6 +400,96 @@ class Live:
         os.makedirs(os.path.join(F.DATA_DIR, "live"), exist_ok=True)
         F.save_json(os.path.join(F.DATA_DIR, "live", f"{d}_events.json"), self.events)
 
+    # ---------------- 板塊即時資金流（主動買賣＝外盤成交額 − 內盤成交額）
+    def sector_map(self):
+        """代號 → [板塊]；名稱 → 分類。用 sectors.csv，沒有列進去的股票歸「未分類」"""
+        if getattr(self, "_secmap", None) is not None:
+            return self._secmap
+        rows = F.read_sectors() or []
+        by_code, kinds, order = {}, {}, []
+        for name, code, kind in rows:
+            if name not in kinds:
+                kinds[name] = kind
+                order.append(name)
+            by_code.setdefault(code, [])
+            if name not in by_code[code]:
+                by_code[code].append(name)
+        for c in self.ref:
+            if c not in by_code:
+                by_code[c] = ["未分類"]
+                if "未分類" not in kinds:
+                    kinds["未分類"] = "產業"
+                    order.append("未分類")
+        self._secmap = (by_code, kinds, order)
+        return self._secmap
+
+    def sector_flow(self):
+        """每個板塊、每分鐘的累計主動買賣淨額與成交額（億）。從盤中服務啟動開始累計；沒報價的分鐘沿用前一分鐘。
+        結果快取 15 秒（全市場約 2,000 檔 × 271 分鐘）。"""
+        now = time.time()
+        cache = getattr(self, "_flow_cache", None)
+        if cache and now - cache[0] < 15:
+            return cache[1]
+        by_code, kinds, order = self.sector_map()
+        N, W = self.MB_N, self.MB_W
+        idx = {n: k for k, n in enumerate(order)}
+        net = [[0.0] * N for _ in order]
+        val = [[0.0] * N for _ in order]
+        tot_net, tot_val = [0.0] * N, [0.0] * N
+        first, last = N, -1
+        with self.lock:
+            items = list(self.mbar.items())
+        for c, a in items:
+            secs = [idx[n] for n in by_code.get(c, []) if n in idx]
+            cv = co = None
+            row_n, row_v = [0.0] * N, [0.0] * N
+            seen = False
+            for k in range(N):
+                b = k * W
+                v4 = a[b + 4]
+                if not math.isnan(v4):
+                    cv, co = v4, a[b + 5]
+                    if not seen:
+                        seen = True
+                        first = min(first, k)
+                    last = max(last, k)
+                if cv is not None:
+                    row_n[k] = 2 * co - cv          # 外盤 − 內盤（內盤＝成交額 − 外盤）
+                    row_v[k] = cv
+            if not seen:
+                continue
+            for k in range(N):
+                tot_net[k] += row_n[k]; tot_val[k] += row_v[k]
+            for j in secs:
+                nj, vj = net[j], val[j]
+                for k in range(N):
+                    nj[k] += row_n[k]; vj[k] += row_v[k]
+        rnd = lambda arr: [round(x, 2) if first <= k <= last else None for k, x in enumerate(arr)]
+        out = {"date": self.date, "updated": self.updated, "status": status_now(self.cfg), "first": first if last >= 0 else None, "last": last if last >= 0 else None,
+               "sectors": order, "types": [kinds[n] for n in order],
+               "net": [rnd(x) for x in net], "val": [rnd(x) for x in val], "totNet": rnd(tot_net), "totVal": rnd(tot_val)}
+        self._flow_cache = (now, out)
+        return out
+
+    def save_flow(self):
+        """板塊即時資金流存檔：data/live/flow_last.js（服務關掉後網頁也能回放今天）與 flow_日期.js（留存）"""
+        if not self.mbar:
+            return
+        try:
+            out = self.sector_flow()
+            out = dict(out, saved=F.now_tw().strftime("%H:%M:%S"))
+            d = self.date or F.now_tw().strftime("%Y%m%d")
+            body = "window.TWFLOW_FLOW=" + json.dumps(out, ensure_ascii=False, separators=(",", ":")) + ";\n"
+            for name in ("flow_last.js", f"flow_{d}.js"):
+                p = os.path.join(F.DATA_DIR, "live", name)
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                tmp = f"{p}.{os.getpid()}.tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(body)
+                os.replace(tmp, p)
+        except Exception as e:
+            log(f"  ! 板塊資金流存檔失敗：{e}")
+
     def save_last(self):
         """最後一次報價存成 data/live/last.js：盤中服務關掉後，直接開 dashboard.html 也看得到當天的收盤報價
         （晚上 run.bat 抓到官方收盤資料之前）"""
@@ -420,6 +510,7 @@ class Live:
             self.last_saved = time.time()
         except Exception as e:
             log(f"  ! 收盤報價存檔失敗：{e}")
+        self.save_flow()
 
     def snapshot(self):
         with self.lock:
@@ -448,7 +539,7 @@ def status_now(cfg):
 
 # ----------------------------------------------------------------- 輪詢
 MIS = None
-LIVE_VERSION = 5          # 盤中服務版本：新版啟動時若發現舊版（2 以上）在跑，會請它結束後接手（v3：直接開 dashboard.html 也能連、收盤報價存檔；v4：早上補抓到新資料會自動換參考資料；v5：大盤開盤價與分時）
+LIVE_VERSION = 6          # 盤中服務版本：新版啟動時若發現舊版（2 以上）在跑，會請它結束後接手（v3：直接開 dashboard.html 也能連、收盤報價存檔；v4：早上補抓到新資料會自動換參考資料；v5：大盤開盤價與分時）
 QUIT = threading.Event()  # 收到「交棒」要求時結束整個服務
 
 
@@ -549,6 +640,8 @@ def make_handler(live):
             p = urllib.parse.urlparse(self.path).path
             if p == "/api/live":
                 return self._json(live.snapshot())
+            if p == "/api/flow":
+                return self._json(live.sector_flow())
             if p == "/api/stock":
                 q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 code = (q.get("code") or [""])[0].strip()

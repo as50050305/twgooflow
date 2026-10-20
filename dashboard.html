@@ -99,6 +99,12 @@ main{ max-width:1400px; margin:0 auto; padding:1rem; padding-bottom:5rem }
 .tile .val{ font-size:1.45rem; font-weight:650; line-height:1.25; margin-top:.15rem; white-space:nowrap }
 .tile .dl{ font-size:.85rem }
 .tile.link{ cursor:pointer; transition:border-color .15s }
+.flowhead{ display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; margin-bottom:.6rem }
+.flowhead .clock{ font-size:2rem; font-weight:700; color:var(--accent-ink); letter-spacing:.02em; line-height:1 }
+.flowtiles{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.6rem; margin-bottom:.6rem }
+.ftile{ border:1px solid var(--border); border-radius:10px; padding:.5rem .7rem; min-width:0 }
+.ftile .lab{ font-size:.75rem; color:var(--ink-2) } .ftile .nm{ font-weight:650; font-size:.92rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.flowcard canvas{ display:block; width:100%; touch-action:pan-y; cursor:pointer }
 .sumpts{ margin:.2rem 0 .4rem; padding-left:1.2rem; display:grid; gap:.45rem; line-height:1.6 }
 .tile.link:hover, .tile.link:focus-visible{ border-color:var(--accent); outline:none }
 .tile.link .go{ font-size:.75rem; color:var(--accent-ink); margin-top:.3rem }
@@ -1611,6 +1617,7 @@ function viewOverview(main) {
   App.bubChanged = bubChanged;
   const bubbleCard = card('板塊資金泡泡圖', '橫軸＝近 5 日淨流入，縱軸＝比近 20 日平均更偏買或偏賣',
     h('div', { class: 'row', style: { marginBottom: '.5rem' } },
+      seg([['river', '河道圖'], ['bubble', '四象限（舊）']], App.flowView, v => { App.flowView = v; LS.set('flowView', v); render(); }),
       seg([['all', '全部'], ['產業', '產業別'], ['概念', '概念股']], S.secView, v => { S.secView = v; saveSettings(); bubChanged(); }),
       seg([['sqrt', '開根號刻度'], ['linear', '線性']], S.scale, v => { S.scale = v; saveSettings(); drawBub(); }),
       h('button', { class: 'btn', type: 'button', onclick: openHideSectors, title: '隱藏的板塊也不會出現在排行與摘要' }, '隱藏板塊', hiddenN ? `（${hiddenN}）` : ''),
@@ -1646,7 +1653,8 @@ function viewOverview(main) {
         h('p', null, '漲跌廣度＝上漲家數÷(上漲＋下跌)×100；法人力道＝f(今日官方法人合計÷近 20 日絕對值平均)；指數動能＝f(加權指數漲跌幅÷近 20 日標準差)；融資熱度＝f(融資餘額市值變化的 20 日 z 分數)；板塊廣度＝淨流入板塊比例×100。'),
         h('p', null, '0–20 極度恐慌、20–40 恐慌、40–60 中性、60–80 樂觀、80–100 極度樂觀。'))),
   );
-  main.append(tiles, h('div', { class: 'grid g-main', style: { marginTop: '1rem' } }, h('div', { class: 'grid' }, bubbleCard), right));
+  const useRiver = App.flowView !== 'bubble';
+  main.append(tiles, h('div', { class: 'grid g-main', style: { marginTop: '1rem' } }, h('div', { class: 'grid' }, useRiver ? flowCard({ detailEl }) : bubbleCard), right));
 
   // 泡泡圖繪製（含回放）
   const t0 = Math.max(0, t - 29);
@@ -1673,7 +1681,7 @@ function viewOverview(main) {
     drawSectorDetail(detailEl, bt);
   }
   App.drawBub = drawBub;
-  drawFilterBar();
+  if (!useRiver) drawFilterBar();
   function togglePlay() {
     if (App.playing) { stopPlay(); return; }
     if (App.bt >= t) App.bt = t0;
@@ -1682,11 +1690,12 @@ function viewOverview(main) {
     drawBub();
   }
   App.resetPlayBtn = () => playBtn.replaceChildren(icon('play'), ' 回放');
+  if (useRiver) { App.drawBub = () => drawSectorDetail(detailEl, App.t); drawSectorDetail(detailEl, App.t); return; }
   drawBub();
 }
 function stopPlay() { if (App.playing) { clearInterval(App.playing); App.playing = null; if (App.resetPlayBtn) App.resetPlayBtn(); } }
 function drawSectorDetail(el, t) {
-  if (App.selSector == null || !M.sectors[App.selSector]) { el.replaceChildren(h('div', { class: 'tiny muted', style: { marginTop: '.6rem' } }, '點選泡泡可查看該板塊的成分股與主要貢獻個股。')); return; }
+  if (App.selSector == null || !M.sectors[App.selSector]) { el.replaceChildren(h('div', { class: 'tiny muted', style: { marginTop: '.6rem' } }, '點選板塊可查看該板塊的成分股與主要貢獻個股。')); return; }
   const sc = M.sectors[App.selSector], st = sectorStats(t)[sc.id];
   const d1 = sectorDetail(t, sc.id, 1), d5 = sectorDetail(t, sc.id, 5);
   const rows = sc.m.map(i => ({ i, n1: M.net[t][i], n5: rsum(M.net, t, 5, i), r5: stockRetN(t, i, 5) * 100, pw: power(t, i) })).sort((a, b) => Math.abs(b.n5) - Math.abs(a.n5));
@@ -2746,6 +2755,7 @@ function viewLive(main) {
   drawLive(box);
   pollLive();
 }
+function liveRiverEl() { if (!App.liveRiver) App.liveRiver = flowCard({ mode: 'live' }); requestAnimationFrame(() => App.liveRiver.resume()); return App.liveRiver; }
 function drawLive(box) {
   const d = LIVE.data;
   if (!d) { box.replaceChildren(card('盤中即時', null, h('p', null, LIVE.err ? '連不到本機服務（live.py）：' + LIVE.err.message + '。請確認 live.bat 的視窗還開著。' : '正在連線本機服務…'))); return; }
@@ -2825,6 +2835,8 @@ function drawLive(box) {
       h('div', { class: 'tile' }, h('div', { class: 'lab' }, '漲跌家數'), h('div', { class: 'val num' }, `${up} : ${dn}`), h('div', { class: 'ratio' }, h('i', { style: { flex: up, background: 'var(--up)' } }), h('i', { style: { flex: dn, background: 'var(--down)' } })), h('div', { class: 'tiny ink2' }, `平盤 ${fl}`)),
       h('div', { class: 'tile' }, h('div', { class: 'lab' }, '掃描範圍成交值'), h('div', { class: 'val num' }, Math.round(tv).toLocaleString('en-US') + ' 億')),
       h('div', { class: 'tile' }, h('div', { class: 'lab' }, '大筆資金突破'), h('div', { class: 'val num' }, evs.length + ' 檔'), h('div', { class: 'tiny ink2' }, nowNew.length ? `${nowNew.length} 檔是剛觸發的` : ''))),
+    h('div', { style: { height: '1rem' } }),
+    liveRiverEl(),
     h('div', { style: { height: '1rem' } }),
     card('大筆資金突破訊號', '今天觸發的股票（每檔只記第一次）', h('div', { class: 'small ink2', style: { marginBottom: '.4rem' } },
       `條件：成交價高於前 20 日最高價、最近 5 分鐘成交金額 ≥ ${th.minVal5} 億且是平常同時段的 ${th.ratio5} 倍以上、預估全日量比 ≥ ${th.estVR}、最近 5 分鐘外盤比 ≥ ${Math.round((th.outer5 || 0) * 100)}%`,
@@ -3194,6 +3206,234 @@ function revChartDraw(el, rows, W) {
   svg.appendChild(s('text', { x: W - pad.r + 4, y: Y(yhi) + 10 }, Math.round(yhi) + '%')); svg.appendChild(s('text', { x: W - pad.r + 4, y: Y(0) + 4 }, '0%'));
   el.appendChild(svg);
   el.appendChild(h('div', { class: 'legend' }, h('span', null, h('i', { class: 'box', style: { background: 'var(--up)', opacity: .45 } }), '營收（年增為正）'), h('span', null, h('i', { class: 'box', style: { background: 'var(--down)', opacity: .45 } }), '營收（年增為負）'), h('span', null, h('i', { style: { background: 'var(--accent)' } }), '年增率')));
+}
+
+/* ================= 板塊資金流「河道圖」（盤後法人／盤中主動買賣） ================= */
+App.flowView = App.flowView || LS.get('flowView', 'river');      // river＝河道圖、bubble＝舊的四象限泡泡圖
+App.flowMode = App.flowMode || 'eod';                             // eod＝盤後法人、live＝盤中主動買賣
+App.flowN = App.flowN || 5;                                       // 盤後期間：1／5／20 日
+App.flowLiveK = App.flowLiveK || LS.get('flowLiveK', 'day');     // 盤中：day＝開盤到現在、win＝最近 N 分鐘（N＝App.flowWin）
+if (App.flowLiveK === '15') App.flowLiveK = 'win';
+App.flowWin = Math.max(3, Math.round(+App.flowWin || +LS.get('flowWin', 15) || 15));   // 盤中切片長度（分鐘），最短 3 分鐘
+const FLOW_WINS = [3, 5, 10, 15, 30, 60];
+function flowK() { return App.flowLiveK === 'win' ? App.flowWin : 0; }
+function flowKLab() { const K = flowK(); return K ? `最近 ${K} 分鐘` : '開盤到現在'; }
+App.flowTop = App.flowTop || LS.get('flowTop', 8);                // 流入、流出各顯示幾名（0＝全部）
+const FLOWD = { data: null, at: 0, src: null, loading: null };
+async function loadFlowData(force) {
+  if (FLOWD.loading) return FLOWD.loading;
+  FLOWD.loading = (async () => {
+    if (liveUp()) {
+      if (!force && FLOWD.data && FLOWD.src === 'live' && Date.now() - FLOWD.at < 20000) return FLOWD.data;
+      try { const r = await fetch(LIVE_BASE + '/api/flow', { cache: 'no-store' }); if (r.ok) { FLOWD.data = await r.json(); FLOWD.at = Date.now(); FLOWD.src = 'live'; return FLOWD.data; } } catch (e) { /* 舊版服務沒有 /api/flow */ }
+    }
+    if (FLOWD.src === 'file' && !force && FLOWD.data) return FLOWD.data;
+    await new Promise(res => { const old = document.getElementById('flowjs'); if (old) old.remove(); const sc = document.createElement('script'); sc.id = 'flowjs'; sc.src = 'data/live/flow_last.js?t=' + Date.now();
+      sc.onload = () => { if (window.TWFLOW_FLOW) { FLOWD.data = window.TWFLOW_FLOW; FLOWD.src = 'file'; FLOWD.at = Date.now(); } res(); }; sc.onerror = () => { sc.remove(); res(); }; document.head.appendChild(sc); });
+    return FLOWD.data;
+  })().finally(() => { FLOWD.loading = null; });
+  return FLOWD.loading;
+}
+function flowSectorOk(sc, type) {
+  if (sc && !visibleSector(sc)) return false;
+  if (!sc && S.secView !== 'all' && type !== S.secView) return false;
+  const B = S.bub; if (B.pickOn && B.pick.length) return B.pick.includes(sc ? sc.name : '');
+  return true;
+}
+function flowPickRows(rows) {
+  const n = App.flowTop; if (!n) return rows.filter(r => r.v !== 0 || r.w > 0);
+  const pos = rows.filter(r => r.v > 0).sort((a, b) => b.v - a.v).slice(0, n), neg = rows.filter(r => r.v < 0).sort((a, b) => a.v - b.v).slice(0, n);
+  return [...pos, ...neg];
+}
+// 盤後：每天一格（近 30 個交易日），值＝期間法人淨流入（億），粗細＝期間成交額
+function eodFrames(t) {
+  const t0 = Math.max(0, t - 29), n = App.flowN, frames = [];
+  for (let k = t0; k <= t; k++) {
+    const st = sectorStats(k), rows = [];
+    for (const x of st) { const sc = M.sectors[x.id]; if (!flowSectorOk(sc)) continue;
+      let w = 0; for (let q = Math.max(0, k - n + 1); q <= k; q++) w += M.secVal[q][x.id];
+      rows.push({ key: sc.name, id: x.id, name: sc.name, type: sc.type, v: n === 1 ? x.f1 : n === 5 ? x.f5 : x.f20, w, n: sc.m.length }); }
+    let tot = 0; for (let q = Math.max(0, k - n + 1); q <= k; q++) { const o = officialNet(q); tot += o != null ? o : sum(M.net[q]); }
+    frames.push({ label: fmt.date(M.dates[k]), sub: `${fmt.fdate(M.dates[k])}・${n === 1 ? '當日' : '近 ' + n + ' 日'}${BASIS[M.basis].short}買賣超`, t: k, rows, tot });
+  }
+  return frames;
+}
+// 盤中：每分鐘一格，值＝主動買賣淨額（外盤 − 内盤，億），粗細＝成交額
+function liveFrames(F) {
+  if (!F || F.first == null) return [];
+  const frames = [], K = flowK();
+  const scOf = new Map(M.sectors.map(sc => [sc.name, sc]));
+  for (let m = F.first; m <= F.last; m++) {
+    const m0 = K ? Math.max(F.first, m - K) : null, rows = [];
+    F.sectors.forEach((name, j) => { const sc = scOf.get(name); if (!flowSectorOk(sc, F.types[j])) return;
+      const a = F.net[j][m], b = F.val[j][m]; if (a == null) return;
+      const v = K ? a - (F.net[j][m0] || 0) : a, w = K ? b - (F.val[j][m0] || 0) : b;
+      rows.push({ key: name, id: sc ? sc.id : null, name, type: F.types[j], v, w, n: sc ? sc.m.length : null }); });
+    const tot = K ? F.totNet[m] - (F.totNet[m0] || 0) : F.totNet[m];
+    frames.push({ label: minLab(m), sub: `${fmt.fdate(F.date || '')}・${flowKLab()}的主動買賣淨額`, m, rows, tot });
+  }
+  return frames;
+}
+
+/* 河道圖繪製引擎（canvas）：列會依數值重新排序並平滑移動，粒子從中線流向箭頭 */
+function makeRiver(wrap, opts) {
+  const cv = h('canvas', { role: 'img', 'aria-label': '板塊資金流河道圖' }), ctx = cv.getContext('2d');
+  const tip = chartBox(wrap); wrap.insertBefore(cv, tip); wrap.style.position = 'relative';
+  const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const R = { rows: new Map(), order: [], scale: 1, tScale: 1, wMax: 1, running: false, hover: null, col: {}, colAt: 0 };
+  const rowH = 26, gapH = 14, topH = 22;
+  const css = () => { const g = getComputedStyle(document.documentElement); const v = k => g.getPropertyValue(k).trim();
+    R.col = { up: v('--up') || '#d03b3b', down: v('--down') || '#138a36', ink: v('--ink') || '#000', ink2: v('--ink-2') || '#555', muted: v('--muted') || '#777', grid: v('--grid') || '#ddd', l1: v('--l1') || '#2a78d6', l3: v('--l3') || '#7a4fd0', wash: v('--accent-wash') || 'rgba(42,120,214,.1)' }; R.colAt = Date.now(); };
+  css();
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  function setFrame(frameRows) {
+    const pos = frameRows.filter(r => r.v >= 0).sort((a, b) => b.v - a.v), neg = frameRows.filter(r => r.v < 0).sort((a, b) => b.v - a.v);
+    R.order = [...pos, ...neg]; R.nPos = pos.length;
+    const keys = new Set();
+    R.order.forEach((r, k) => { keys.add(r.key); const ty = topH + k * rowH + (k >= R.nPos ? gapH : 0);
+      let s = R.rows.get(r.key);
+      if (!s) { s = { y: ty, v: 0, w: r.w, parts: Array.from({ length: 36 }, () => ({ p: Math.random(), j: rnd(-1, 1), sp: rnd(0.004, 0.011) })) }; R.rows.set(r.key, s); }
+      Object.assign(s, { ty, tv: r.v, tw: r.w, r, gone: false }); if (reduce) { s.y = ty; s.v = r.v; s.w = r.w; } });
+    for (const [k, s] of R.rows) if (!keys.has(k)) { s.gone = true; s.tv = 0; }
+    R.tScale = Math.max(0.01, ...R.order.map(r => Math.abs(r.v))); R.wMax = Math.max(0.01, ...R.order.map(r => r.w || 0));
+    if (reduce || R.scale === 1) R.scale = R.tScale;
+    const H = topH + R.order.length * rowH + (R.nPos && R.nPos < R.order.length ? gapH : 0) + 6;
+    cv.style.height = H + 'px'; R.H = H;
+    if (!R.running) start();
+  }
+  function draw() {
+    if (Date.now() - R.colAt > 2000) css();
+    const W = Math.max(320, wrap.clientWidth), H = R.H || 100, dpr = window.devicePixelRatio || 1;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.width = W + 'px'; }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    const mobile = W < 600, labW = mobile ? 92 : 132, valW = mobile ? 74 : 96, x0 = labW + (W - labW - valW) * 0.5, half = (W - labW - valW) / 2 - 10;
+    R.geo = { labW, valW, x0, half, W };
+    const k = reduce ? 1 : 0.14; R.scale += (R.tScale - R.scale) * k;
+    // 中線與流出／流入
+    ctx.strokeStyle = R.col.grid; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(x0, topH - 4); ctx.lineTo(x0, H - 2); ctx.stroke(); ctx.setLineDash([]);
+    ctx.font = '12px system-ui, sans-serif'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = R.col.down; ctx.textAlign = 'right'; ctx.fillText('流出', x0 - 8, 10); ctx.fillStyle = R.col.up; ctx.textAlign = 'left'; ctx.fillText('流入', x0 + 8, 10);
+    let busy = false;
+    for (const [key, s] of R.rows) {
+      s.y += (s.ty - s.y) * (reduce ? 1 : 0.3); s.v += (s.tv - s.v) * k; s.w += ((s.tw || 0) - s.w) * k;
+      if (Math.abs(s.ty - s.y) > 0.3 || Math.abs(s.tv - s.v) > R.scale * 0.002) busy = true;
+      if (s.gone && Math.abs(s.v) < R.scale * 0.01) { R.rows.delete(key); continue; }
+      if (s.gone) continue;
+      const frac = Math.min(1, Math.abs(s.v) / R.scale), cy = s.y + rowH / 2, len = (S.scale === 'sqrt' ? Math.sqrt(frac) : frac) * half, dir = s.v >= 0 ? 1 : -1, col = s.v >= 0 ? R.col.up : R.col.down;
+      const th = 2 + 9 * Math.sqrt(Math.max(0, s.w) / R.wMax);
+      if (R.hover === key) { ctx.fillStyle = R.col.wash; ctx.fillRect(0, s.y + 1, W, rowH - 2); }
+      // 標籤
+      ctx.fillStyle = s.r.type === '產業' ? R.col.l1 : R.col.l3; ctx.beginPath(); ctx.arc(8, cy, 3, 0, 6.3); ctx.fill();
+      ctx.fillStyle = R.col.ink; ctx.textAlign = 'left'; ctx.font = (mobile ? '12px' : '13px') + ' system-ui, sans-serif';
+      let nm = s.r.name; while (ctx.measureText(nm).width > labW - 22 && nm.length > 2) nm = nm.slice(0, -1); if (nm !== s.r.name) nm += '…';
+      ctx.fillText(nm, 16, cy);
+      // 河道（底色＋粒子）
+      if (len > 0.5) {
+        ctx.globalAlpha = 0.16; ctx.fillStyle = col; ctx.fillRect(dir > 0 ? x0 : x0 - len, cy - th / 2, len, th); ctx.globalAlpha = 1;
+        const np = Math.min(s.parts.length, 8 + Math.round(th * 2.4));
+        for (let q = 0; q < np; q++) { const pt = s.parts[q]; if (!reduce) pt.p = (pt.p + pt.sp) % 1;
+          const x = x0 + dir * len * pt.p, y = cy + pt.j * th / 2 * 0.9;
+          ctx.globalAlpha = 0.18 + 0.7 * pt.p; ctx.fillStyle = col; ctx.fillRect(x - 1.3, y - 0.9, 2.6, 1.8); }
+        ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x0 + dir * len, cy, 3 + th * 0.28, 0, 6.3); ctx.fill();
+      // 數值
+      ctx.textAlign = 'right'; ctx.font = (mobile ? '12px' : '13px') + ' ui-monospace, SFMono-Regular, Menlo, monospace'; ctx.fillStyle = col;
+      ctx.fillText((s.tv > 0 ? '+' : s.tv < 0 ? '−' : '') + Math.abs(s.tv).toFixed(Math.abs(s.tv) >= 100 ? 1 : 2) + ' 億', W - 4, cy);
+    }
+    return busy;
+  }
+  function loop() {
+    if (!wrap.isConnected) { R.running = false; return; }
+    const busy = draw();
+    if (reduce && !busy) { R.running = false; return; }
+    if (document.hidden) { R.running = false; document.addEventListener('visibilitychange', () => { if (!document.hidden) start(); }, { once: true }); return; }
+    requestAnimationFrame(loop);
+  }
+  function start() { if (R.running) return; R.running = true; requestAnimationFrame(loop); }
+  const rowAt = ev => { const rc = cv.getBoundingClientRect(), y = ev.clientY - rc.top; for (const [key, s] of R.rows) if (!s.gone && y >= s.y && y < s.y + rowH) return [key, s]; return null; };
+  cv.addEventListener('pointermove', ev => { const hit = rowAt(ev); R.hover = hit ? hit[0] : null; if (reduce) draw();
+    if (!hit) { hideTip(tip); return; } const r = hit[1].r, rc = cv.getBoundingClientRect();
+    showTip(wrap, tip, ev.clientX - rc.left, ev.clientY - rc.top, [h('div', { style: { fontWeight: 650 } }, r.name, ' ', h('span', { class: 'tiny muted' }, r.type)),
+      tipRow(typeof opts.valName === 'function' ? opts.valName() : '淨流入', fmt.yiu(r.v, 2), cls(r.v)), tipRow('成交額', r.w != null ? fmt.int(r.w) + ' 億' : '—'), r.n ? tipRow('成分股', r.n + ' 檔') : null, opts.onPick && r.id != null ? h('div', { class: 'tiny muted' }, '點一下看成分股') : null]); });
+  cv.addEventListener('pointerleave', () => { R.hover = null; hideTip(tip); if (reduce) draw(); });
+  cv.addEventListener('click', ev => { const hit = rowAt(ev); if (hit && opts.onPick && hit[1].r.id != null) opts.onPick(hit[1].r); });
+  return { setFrame, resume: start };
+}
+
+/* 河道圖卡片：盤後／盤中切換、期間、回放 */
+// 盤中切片長度：常用按鈕＋自訂分鐘數（最短 3 分鐘，最長 270 分鐘＝整個交易時段）
+function flowWinCtl(onChange) {
+  const set = v => { v = Math.round(+v); if (!isFinite(v)) return; v = clamp(v, 3, 270); App.flowWin = v; LS.set('flowWin', v); onChange(); };
+  const inp = h('input', { class: 'numin', type: 'number', min: 3, max: 270, step: 1, value: App.flowWin, style: { width: '4.2rem' }, 'aria-label': '自訂間隔（分鐘）',
+    onchange: e => { set(e.target.value); e.target.value = App.flowWin; box.querySelectorAll('.seg button').forEach(b => { const on = +b.dataset.v === App.flowWin; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }); } });
+  const sg = h('div', { class: 'seg', role: 'group', 'aria-label': '間隔' }, FLOW_WINS.map(v => h('button', { type: 'button', 'data-v': v, class: v === App.flowWin ? 'on' : '', 'aria-pressed': v === App.flowWin,
+    onclick: () => { set(v); inp.value = App.flowWin; sg.querySelectorAll('button').forEach(b => { const on = +b.dataset.v === App.flowWin; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }); } }, v + ' 分')));
+  const box = h('span', { class: 'row', style: { gap: '.4rem', alignItems: 'center' } }, h('span', { class: 'small ink2' }, '間隔'), sg, h('label', { class: 'chk small' }, '自訂', inp, '分（最短 3）'));
+  return box;
+}
+function flowCard(o = {}) {
+  const fixed = o.mode;   // 盤中分頁固定用 live
+  const el = h('section', { class: 'card flowcard' });
+  const head = h('div'), tiles = h('div', { class: 'flowtiles' }), wrap = h('div', { class: 'chart' }), note = h('div', { class: 'tiny muted', style: { marginTop: '.4rem' } });
+  const range = h('input', { type: 'range', min: 0, max: 0, value: 0, 'aria-label': '回放時間' }), lab = h('span', { class: 'pd small' });
+  const playBtn = h('button', { class: 'btn', type: 'button', onclick: () => togglePlay() }, icon('play'), ' 回放');
+  const detail = o.detailEl || null;
+  let frames = [], idx = 0, follow = true, timer = null, play = null;
+  const mode = () => fixed || App.flowMode;
+  const river = makeRiver(wrap, { valName: () => mode() === 'live' ? '主動買賣淨額' : '法人淨流入', onPick: r => { App.selSector = r.id; if (detail) drawSectorDetail(detail, mode() === 'eod' && frames[idx] ? frames[idx].t : App.t); } });
+  const show = k => {
+    if (!frames.length) return; idx = clamp(k, 0, frames.length - 1); const f = frames[idx];
+    river.setFrame(flowPickRows(f.rows));
+    const all = f.rows, best = all.slice().sort((a, b) => b.v - a.v)[0], worst = all.slice().sort((a, b) => a.v - b.v)[0];
+    const tl = (lab_, v, nm) => h('div', { class: 'ftile' }, h('div', { class: 'lab' }, lab_), nm ? h('div', { class: 'nm' }, nm) : null, h('div', { class: 'num ' + cls(v), style: { fontWeight: 650, fontSize: nm ? '.9rem' : '1.35rem' } }, v == null ? '—' : fmt.yiu(v, nm ? 2 : 1)));
+    tiles.replaceChildren(tl(mode() === 'live' ? '全市場・' + flowKLab() : '全市場・' + BASIS[M.basis].short, f.tot),
+      tl('吸金最多', best && best.v > 0 ? best.v : null, best && best.v > 0 ? best.name : '—'), tl('失血最多', worst && worst.v < 0 ? worst.v : null, worst && worst.v < 0 ? worst.name : '—'));
+    head.querySelector('.clock').textContent = f.label; head.querySelector('.fsub').textContent = f.sub;
+    range.max = frames.length - 1; range.value = idx; lab.textContent = f.label + (idx === frames.length - 1 ? '（最新）' : '');
+    follow = idx === frames.length - 1;
+    if (mode() === 'eod' && detail) drawSectorDetail(detail, f.t);
+  };
+  const stopPlay_ = () => { if (play) { clearInterval(play); play = null; playBtn.replaceChildren(icon('play'), ' 回放'); } };
+  function togglePlay() {
+    if (play) { stopPlay_(); return; }
+    if (idx >= frames.length - 1) idx = 0;
+    playBtn.replaceChildren(icon('pause'), ' 暫停');
+    const step = mode() === 'live' ? 2 : 1, ms = mode() === 'live' ? 220 : 800;
+    play = setInterval(() => { if (!el.isConnected || idx >= frames.length - 1) { stopPlay_(); return; } show(idx + step); }, ms); show(idx);
+  }
+  range.addEventListener('input', () => { stopPlay_(); show(+range.value); });
+  const build = async () => {
+    stopPlay_();
+    if (mode() === 'eod') { frames = eodFrames(App.t); note.textContent = `河道長度＝${App.flowN === 1 ? '當日' : '近 ' + App.flowN + ' 日'}${BASIS[M.basis].name}淨流入（億，成分股加總${S.scale === 'sqrt' ? '，開根號刻度' : ''}）；河道越粗＝期間成交額越大。回放＝近 30 個交易日一天一格。`; show(frames.length - 1); return; }
+    const F = await loadFlowData(); frames = liveFrames(F);
+    if (!frames.length) { river.setFrame([]); tiles.replaceChildren(); head.querySelector('.clock').textContent = '--:--';
+      note.replaceChildren(h('b', null, FLOWD.src === 'live' || liveUp() ? '盤中服務還沒有收集到資料（剛啟動或還沒開盤），約 1 分鐘後就會出現。' : '盤中服務沒開，也沒有今天的存檔。平日盤中雙擊 live.bat 就會開始記錄。'),
+        liveUp() && !FLOWD.data ? h('div', null, '如果一直沒出現：盤中服務可能是舊版，請重新雙擊 live.bat。') : null); return; }
+    note.textContent = `主動買賣＝外盤成交額 − 內盤成交額（用報價快照估算，從盤中服務啟動開始累計）；河道越粗＝成交越大。${flowK() && flowK() < 5 ? '一般股票約每 1～2 分鐘才更新一次報價，間隔設很短時數字會比較跳。' : ''}${FLOWD.src === 'file' ? `盤中服務沒開，顯示的是存檔（${FLOWD.data.saved || ''}）。` : ''}`;
+    show(follow ? frames.length - 1 : Math.min(idx, frames.length - 1));
+  };
+  const controls = () => h('div', { class: 'row', style: { marginBottom: '.6rem', alignItems: 'center' } },
+    fixed ? null : seg([['eod', '盤後・法人'], ['live', '盤中・主動買賣']], App.flowMode, v => { App.flowMode = v; follow = true; redrawControls(); build(); }),
+    mode() === 'eod' ? seg([['1', '當日'], ['5', '近 5 日'], ['20', '近 20 日']], String(App.flowN), v => { App.flowN = +v; build(); }) : seg([['day', '開盤到現在'], ['win', '最近 N 分鐘']], App.flowLiveK, v => { App.flowLiveK = v; LS.set('flowLiveK', v); redrawControls(); build(); }),
+    mode() === 'live' && App.flowLiveK === 'win' ? flowWinCtl(() => build()) : null,
+    h('select', { class: 'ctl', 'aria-label': '顯示幾名', onchange: e => { App.flowTop = +e.target.value; LS.set('flowTop', App.flowTop); show(idx); } }, [[8, '流入／流出各 8 名'], [15, '各 15 名'], [0, '全部板塊']].map(([v, l]) => h('option', { value: v, selected: App.flowTop === v }, l))),
+    h('label', { class: 'chk small', title: '開根號：小板塊也看得出長短；線性：長度與金額成正比' }, h('input', { type: 'checkbox', checked: S.scale === 'sqrt', onchange: e => { S.scale = e.target.checked ? 'sqrt' : 'linear'; saveSettings(); river.resume(); } }), '開根號刻度'),
+    fixed ? null : seg([['river', '河道圖'], ['bubble', '四象限（舊）']], App.flowView, v => { App.flowView = v; LS.set('flowView', v); render(); }),
+    fixed ? null : h('button', { class: 'btn', type: 'button', onclick: openHideSectors }, '隱藏板塊', S.hidden.length ? `（${S.hidden.length}）` : ''));
+  const ctlBox = h('div');
+  const redrawControls = () => ctlBox.replaceChildren(controls());
+  head.append(h('div', { class: 'flowhead' }, h('div', null, h('h2', { style: { margin: 0 } }, mode() === 'live' && fixed ? '即時資金流' : '板塊資金流'), h('div', { class: 'small ink2 fsub' })), h('div', { class: 'clock num' }, '--:--')));
+  redrawControls();
+  el.append(head, ctlBox, tiles, wrap, h('div', { class: 'player' }, playBtn, range, lab), note,
+    h('div', { class: 'legend', style: { marginTop: '.4rem' } }, h('span', null, h('i', { class: 'box', style: { background: 'var(--l1)', borderRadius: '50%' } }), '產業'), h('span', null, h('i', { class: 'box', style: { background: 'var(--l3)', borderRadius: '50%' } }), '概念'),
+      h('span', { class: 'tiny muted' }, '一檔股票屬於多個板塊時，每個板塊都會計入；滑鼠移到列上看數字，點一下看成分股。')), detail || '');
+  build();
+  // 盤中：每 30 秒更新（停在最新一格時跟著跑）
+  const startTimer = () => { if (timer) return; timer = setInterval(() => { if (!el.isConnected) { clearInterval(timer); timer = null; return; } if (mode() === 'live' && !play) loadFlowData(true).then(() => { if (follow) build(); }); }, 30000); };
+  startTimer();
+  el.resume = () => { river.resume(); startTimer(); };
+  return el;
 }
 
 /* ================= 每日總結：主力（法人＋大戶＋融資）往哪裡流 ================= */
