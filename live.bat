@@ -1,7 +1,9 @@
 @echo off
-rem Intraday (live) mode: makes sure the live service runs in the background, then opens http://localhost:8765.
-rem If it is already running (e.g. started by the 08:40 schedule), it just opens the browser.
-rem The service does not depend on this window: this window closes by itself after 5 seconds.
+rem Intraday (live) mode: runs the live service IN THIS WINDOW and opens http://localhost:8765.
+rem Keep this window open during trading hours. Close it (or press Ctrl+C) to stop the service.
+rem If a service is already running (e.g. started by the 08:40 schedule), it is asked to stop and this window takes over.
+rem To stop the service from anywhere: double-click stop_live.bat
+title TWFlow live - close this window to stop
 chcp 65001 >nul
 cd /d "%~dp0"
 if not exist logs mkdir logs
@@ -9,12 +11,9 @@ call "%~dp0findpy.bat"
 if not defined PY goto nopy
 echo Using Python:
 %PY% --version
-%PY% live.py --ensure %*
-rem exit code 3 = the live service is already running in the background (not an error): close by itself
-if errorlevel 3 if not errorlevel 4 (
-  timeout /t 5 >nul 2>nul
-  goto :eof
-)
+%PY% live.py --foreground %*
+echo.
+echo Live service stopped. You can close this window.
 pause
 goto :eof
 

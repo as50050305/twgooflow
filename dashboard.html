@@ -98,6 +98,11 @@ main{ max-width:1400px; margin:0 auto; padding:1rem; padding-bottom:5rem }
 .tile .lab{ font-size:.82rem; color:var(--ink-2) }
 .tile .val{ font-size:1.45rem; font-weight:650; line-height:1.25; margin-top:.15rem; white-space:nowrap }
 .tile .dl{ font-size:.85rem }
+.tile.link{ cursor:pointer; transition:border-color .15s }
+.tile.link:hover, .tile.link:focus-visible{ border-color:var(--accent); outline:none }
+.tile.link .go{ font-size:.75rem; color:var(--accent-ink); margin-top:.3rem }
+.mkt-chip .lk{ cursor:pointer; border-radius:6px; padding:.1rem .3rem; margin:-.1rem -.3rem }
+.mkt-chip .lk:hover{ background:var(--accent-wash) }
 .ratio{ display:flex; height:8px; border-radius:4px; overflow:hidden; margin:.45rem 0 .2rem; gap:2px }
 .ratio i{ display:block; height:100% }
 .meter{ position:relative; height:8px; border-radius:4px; margin:.5rem 0 .2rem;
@@ -1539,9 +1544,14 @@ function searchBox(onPick, placeholder) {
 }
 function updateChips() {
   const mk = M.days[App.t].mk, a = mk.taiex, b = mk.tpex;
-  $('#mktchip').replaceChildren(a ? h('span', null, '加權 ', h('b', { class: 'num' }, fmt.px(a.close)), ' ', h('span', { class: 'num ' + cls(a.pct) }, fmt.pct(a.pct))) : '', b ? h('span', { style: { marginLeft: '.8rem' } }, '櫃買 ', h('b', { class: 'num' }, fmt.px(b.close)), ' ', h('span', { class: 'num ' + cls(b.pct) }, fmt.pct(b.pct))) : '');
+  $('#mktchip').replaceChildren(a ? h('span', { class: 'lk', title: '看加權指數大盤頁', onclick: () => goMarket('twse') }, '加權 ', h('b', { class: 'num' }, fmt.px(a.close)), ' ', h('span', { class: 'num ' + cls(a.pct) }, fmt.pct(a.pct))) : '', b ? h('span', { class: 'lk', style: { marginLeft: '.8rem' }, title: '看櫃買指數大盤頁', onclick: () => goMarket('tpex') }, '櫃買 ', h('b', { class: 'num' }, fmt.px(b.close)), ' ', h('span', { class: 'num ' + cls(b.pct) }, fmt.pct(b.pct))) : '');
 }
 
+function goMarket(tab) { App.mkTab = tab; LS.set('mkTab', tab); location.hash = '#market'; }
+// 指數方塊：點進去看大盤頁
+function linkTile(el, tab) { el.classList.add('link'); el.setAttribute('role', 'link'); el.tabIndex = 0; el.title = '看' + MK_NAME[tab] + '大盤頁';
+  el.addEventListener('click', () => goMarket(tab)); el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goMarket(tab); } });
+  el.appendChild(h('div', { class: 'go' }, '看 K 線與法人 ›')); return el; }
 /* ---------- 路由 ---------- */
 function parseRoute() { const hs = location.hash.replace(/^#/, ''); const [r, a] = hs.split('/'); App.route = r || 'overview'; App.arg = a ? decodeURIComponent(a) : null; }
 function render() {
@@ -1561,8 +1571,8 @@ function viewOverview(main) {
   const tile = (lab, val, dl, extra) => h('div', { class: 'tile' }, h('div', { class: 'lab' }, lab), h('div', { class: 'val num' }, val), dl ? h('div', { class: 'dl' }, dl) : null, extra || null);
   const series = k => M.days.slice(Math.max(0, t - 19), t + 1).map(d => d.mk[k] ? d.mk[k].close : null);
   const tiles = h('div', { class: 'tiles' },
-    mk.taiex ? tile('加權指數', fmt.px(mk.taiex.close), h('span', { class: 'num ' + cls(mk.taiex.pct) }, `${fmt.sint(mk.taiex.chg)} 點（${fmt.pct(mk.taiex.pct)}）`), sparkline(series('taiex'))) : null,
-    mk.tpex ? tile('櫃買指數', fmt.px(mk.tpex.close), h('span', { class: 'num ' + cls(mk.tpex.pct) }, `${fmt.yi(mk.tpex.chg)} 點（${fmt.pct(mk.tpex.pct)}）`), sparkline(series('tpex'))) : null,
+    mk.taiex ? linkTile(tile('加權指數', fmt.px(mk.taiex.close), h('span', { class: 'num ' + cls(mk.taiex.pct) }, `${fmt.sint(mk.taiex.chg)} 點（${fmt.pct(mk.taiex.pct)}）`), sparkline(series('taiex'))), 'twse') : null,
+    mk.tpex ? linkTile(tile('櫃買指數', fmt.px(mk.tpex.close), h('span', { class: 'num ' + cls(mk.tpex.pct) }, `${fmt.yi(mk.tpex.chg)} 點（${fmt.pct(mk.tpex.pct)}）`), sparkline(series('tpex'))), 'tpex') : null,
     tile('多空比例', `${Math.round(ud.up / Math.max(1, ud.up + ud.dn) * 100)} : ${Math.round(ud.dn / Math.max(1, ud.up + ud.dn) * 100)}`, null,
       h('div', null, h('div', { class: 'ratio' }, h('i', { style: { flex: ud.up, background: 'var(--up)' } }), h('i', { style: { flex: ud.dn, background: 'var(--down)' } })),
         h('div', { class: 'tiny ink2 num' }, `漲 ${ud.up}・跌 ${ud.dn}・平 ${ud.fl}（上市櫃普通股）`))),
@@ -2810,7 +2820,7 @@ function drawLive(box) {
     h('div', { class: 'row', style: { marginBottom: '.6rem' } }, h('span', { class: 'envchip', style: { borderColor: d.status === 'open' ? 'var(--up)' : 'var(--muted)', color: d.status === 'open' ? 'var(--up)' : 'var(--muted)' } }, h('i', { style: { background: d.status === 'open' ? 'var(--up)' : 'var(--muted)' } }), LIVE_STATUS[d.status] || d.status),
       h('span', { class: 'small ink2' }, `最後更新 ${d.updated || '—'}・畫面每 10 秒更新・掃描 ${codes.length} 檔` + (d.cycleSec ? `・全市場一輪 ${d.cycleSec} 秒` : '') + (d.lagSec != null && d.status === 'open' ? `・報價時間落後約 ${d.lagSec} 秒` : '') + `・已發 ${d.requests} 個請求`, d.lagSec > 120 && d.status === 'open' ? h('b', { class: 'down' }, '（網站回應偏慢）') : null),
       LIVE.ok ? null : h('span', { class: 'tag warn' }, '連線中斷，顯示的是上一筆資料')),
-    h('div', { class: 'tiles' }, ix('t00', '加權指數'), ix('o00', '櫃買指數'),
+    h('div', { class: 'tiles' }, linkTile(ix('t00', '加權指數'), 'twse'), linkTile(ix('o00', '櫃買指數'), 'tpex'),
       h('div', { class: 'tile' }, h('div', { class: 'lab' }, '漲跌家數'), h('div', { class: 'val num' }, `${up} : ${dn}`), h('div', { class: 'ratio' }, h('i', { style: { flex: up, background: 'var(--up)' } }), h('i', { style: { flex: dn, background: 'var(--down)' } })), h('div', { class: 'tiny ink2' }, `平盤 ${fl}`)),
       h('div', { class: 'tile' }, h('div', { class: 'lab' }, '掃描範圍成交值'), h('div', { class: 'val num' }, Math.round(tv).toLocaleString('en-US') + ' 億')),
       h('div', { class: 'tile' }, h('div', { class: 'lab' }, '大筆資金突破'), h('div', { class: 'val num' }, evs.length + ' 檔'), h('div', { class: 'tiny ink2' }, nowNew.length ? `${nowNew.length} 檔是剛觸發的` : ''))),

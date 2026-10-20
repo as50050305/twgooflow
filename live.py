@@ -517,6 +517,12 @@ def make_handler(live):
         def log_message(self, *a):
             pass
 
+        def end_headers(self):
+            # 網頁與資料檔每次都要跟電腦確認是否有新版（程式更新後不用按 Ctrl+F5）；/api 已經自己帶 no-store
+            if not self.path.startswith("/api/"):
+                self.send_header("Cache-Control", "no-cache")
+            super().end_headers()
+
         def _origin_ok(self):
             """允許：同一個網址（http://localhost:8765）、直接雙擊開啟的 dashboard.html（Origin 是 "null" 或 "file://"）、沒有帶 Origin 的本機程式"""
             o = self.headers.get("Origin")
@@ -551,7 +557,7 @@ def make_handler(live):
                 return self._json(live.stock_detail(code))
             if p == "/":
                 self.send_response(302)
-                self.send_header("Location", "/dashboard.html#live")
+                self.send_header("Location", page_path())
                 self.end_headers()
                 return
             if p.startswith("/logs") or p.endswith(".py") or p.endswith(".bat") or "/raw/" in p:
@@ -588,7 +594,7 @@ def make_handler(live):
                 # 只接受本機、而且帶自訂標頭的要求（一般網頁不能跨站送自訂標頭），用來讓新版接手
                 if self.client_address[0] != "127.0.0.1" or self.headers.get("X-TWFlow-Handoff") != "1":
                     return self._json({"error": "forbidden"}, 403)
-                log("收到新版盤中服務的交棒要求，這個舊的服務結束。")
+                log("收到停止要求（live.bat 接手或 stop_live.bat），這個盤中服務結束。")
                 live.save_events()
                 live.save_last()
                 QUIT.set()
@@ -655,6 +661,64 @@ def already_running(port):
     return True
 
 
+def page_path(hash_="live"):
+    """儀表板網址加上檔案更新時間（?v=…）：程式更新後網址就不同，瀏覽器一定會載入新版，不會用舊的暫存。"""
+    try:
+        v = int(os.path.getmtime(os.path.join(F.BASE_DIR, "dashboard.html")))
+    except OSError:
+        v = 0
+    return f"/dashboard.html?v={v}#{hash_}"
+
+
+def request_shutdown(port, wait_sec=10):
+    """請正在執行的盤中服務結束（只接受本機＋自訂標頭的要求）。結束了回傳 True。"""
+    try:
+        op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/shutdown", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json", "X-TWFlow-Handoff": "1"})
+        op.open(req, timeout=5).read()
+    except Exception as e:
+        log(f"  停止要求失敗：{e}")
+        return False
+    for _ in range(wait_sec * 2):
+        time.sleep(0.5)
+        if running_version(port) is None:
+            time.sleep(1)
+            return True
+    return False
+
+
+def take_over(port):
+    """前景模式（live.bat）：如果背景已經有盤中服務在跑（例如 08:40 排程），請它結束，改由這個視窗執行。"""
+    v = running_version(port)
+    if v is None:
+        return True
+    if v < 2:
+        log("！電腦上正在跑的是很舊的盤中服務，不能自動接手：請在工作管理員結束 pythonw.exe／python.exe 後再開 live.bat。")
+        return False
+    log("發現已經有盤中服務在執行，請它結束，改由這個視窗接手…")
+    if request_shutdown(port):
+        return True
+    log("！原本的盤中服務沒有在 10 秒內結束，請執行 stop_live.bat 或在工作管理員結束 python 後再試。")
+    return False
+
+
+def stop_service(port):
+    """stop_live.bat：手動停止盤中服務（不管是在背景還是在別的視窗）"""
+    v = running_version(port)
+    if v is None:
+        log("目前沒有盤中服務在執行，不用停止。")
+        return 0
+    if v < 2:
+        log("！正在跑的是很舊的版本，不支援用這個方式停止：請在工作管理員結束 pythonw.exe／python.exe。")
+        return 1
+    if request_shutdown(port):
+        log("盤中服務已停止。")
+        return 0
+    log("！盤中服務沒有在 10 秒內停止，請在工作管理員結束 pythonw.exe／python.exe。")
+    return 1
+
+
 def refresh_old_days(days_n=25):
     """舊版 fetch.py 整理出來的 days 檔缺少成交金額等欄位：用本機的原始資料重算（不連網）"""
     try:
@@ -694,7 +758,7 @@ def ensure_background(cfg, open_browser=True):
     盤中服務不再綁在這個黑色視窗上，關掉視窗也不會停。回傳結束代碼：3＝服務正常、1＝失敗。"""
     import subprocess
     port = cfg["live_port"]
-    url = f"http://localhost:{port}/dashboard.html#live"
+    url = f"http://localhost:{port}{page_path()}"
     if already_running(port):
         log(f"盤中服務已經在背景正常執行（每個交易日 08:40 自動啟動），不用再開；已幫你打開網頁 {url}")
     else:
@@ -728,6 +792,22 @@ def ensure_background(cfg, open_browser=True):
     return 3
 
 
+def no_quick_edit():
+    """Windows 的黑色視窗預設開著「快速編輯」：在視窗裡點一下就會選取文字，程式下次輸出時整個卡住（報價停止更新）。
+    這裡把它關掉（只影響這個視窗）。"""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.GetStdHandle(-10)
+        mode = ctypes.c_uint32()
+        if k.GetConsoleMode(h, ctypes.byref(mode)):
+            k.SetConsoleMode(h, (mode.value & ~0x0040) | 0x0080)   # 關掉 ENABLE_QUICK_EDIT_MODE，保留 ENABLE_EXTENDED_FLAGS
+    except Exception:
+        pass
+
+
 def main():
     global log
     try:
@@ -737,7 +817,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--test", action="store_true")
     ap.add_argument("--no-browser", action="store_true")
-    ap.add_argument("--ensure", action="store_true", help="確認背景服務在跑（沒有就背景啟動），再打開網頁；live.bat 用")
+    ap.add_argument("--ensure", action="store_true", help="確認背景服務在跑（沒有就背景啟動），再打開網頁")
+    ap.add_argument("--foreground", action="store_true", help="在這個視窗執行（live.bat 用）：已經有服務在跑就請它結束、由這個視窗接手")
+    ap.add_argument("--stop", action="store_true", help="停止正在執行的盤中服務（stop_live.bat 用）")
     a = ap.parse_args()
     F.log = log = F.Log()
     cfg = F.load_config()
@@ -745,7 +827,14 @@ def main():
         cfg.setdefault(k, v)
     if a.ensure:
         sys.exit(ensure_background(cfg, open_browser=not a.no_browser))
+    if a.stop:
+        sys.exit(stop_service(cfg["live_port"]))
     log("=" * 50)
+    no_quick_edit()
+    if a.foreground:
+        print("這個視窗就是盤中服務：開著才會更新報價；要停止就直接關掉這個視窗（或按 Ctrl+C）。", flush=True)
+        if not take_over(cfg["live_port"]):
+            sys.exit(1)
     refresh_old_days()
     ensure_history(cfg)
     ref, ref_date = load_reference()
@@ -768,7 +857,7 @@ def main():
             raise OSError("already running")
         srv = LiveServer((host, cfg["live_port"]), make_handler(live))
     except OSError:
-        url = f"http://localhost:{cfg['live_port']}/dashboard.html#live"
+        url = f"http://localhost:{cfg['live_port']}{page_path()}"
         if running:
             # 這不是錯誤：每個交易日 08:40 的排程已經在背景開好了，不用再開第二個
             log(f"盤中服務已經在背景正常執行（每個交易日 08:40 自動啟動），不用再開；已幫你打開網頁 {url}")
@@ -781,7 +870,7 @@ def main():
         sys.exit(3 if running else 1)
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    url = f"http://localhost:{cfg['live_port']}/dashboard.html#live"
+    url = f"http://localhost:{cfg['live_port']}{page_path()}"
     log(f"儀表板網址：{url}" + ("（同一個 Wi-Fi 的手機可用這台電腦的 IP 連線）" if cfg["live_lan"] else ""))
     if not a.no_browser:
         try:
@@ -806,6 +895,8 @@ def main():
                 stop.set()
     except KeyboardInterrupt:
         stop.set()
+        QUIT.set()               # 按 Ctrl+C＝整個停止（不保留網頁服務）
+        log("按了 Ctrl+C，盤中服務停止。要再開請雙擊 live.bat。")
     live.save_events()
     live.save_last()
     # 收盤後保留網頁服務一段時間，方便查看當天訊號
