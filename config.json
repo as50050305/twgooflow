@@ -1,0 +1,40 @@
+{
+ "_說明": "修改後存檔即可，下次執行生效。路徑請用正斜線 / 或雙反斜線 \\\\。",
+ "backfill_trading_days": 60,
+ "_backfill_trading_days": "要保留／回補的交易日數",
+ "dashboard_trading_days": 60,
+ "ohlc_trading_days": 35,
+ "request_interval_sec": [
+  4.0,
+  6.0
+ ],
+ "_request_interval_sec": "每個請求之間隨機等待的秒數（不要調太小，避免被證交所暫時封鎖）",
+ "retry_waits_sec": [
+  10,
+  30,
+  90,
+  180
+ ],
+ "recent_recheck_trading_days": 7,
+ "max_attempts_per_missing_item": 6,
+ "universe_refresh_days": 7,
+ "mobile_sync_dir": "",
+ "_mobile_sync_dir": "填入雲端硬碟資料夾（例如 C:/Users/你的帳號/OneDrive/twflow），每次執行後會在那裡產生一個內含資料的單檔儀表板 twflow_dashboard.html，方便手機開啟",
+ "history_trading_days": 490,
+ "_history_trading_days": "K 線與動能用的歷史長度（交易日，490 約 2 年；動能與回測只用最近約 1 年）",
+ "live_port": 8765,
+ "_live_port": "盤中服務的網址 http://localhost:8765（被占用時可改其他號碼）",
+ "live_lan": false,
+ "_live_lan": "改成 true：同一個 Wi-Fi 的手機可以用這台電腦的 IP:8765 連線看盤中（Windows 會詢問防火牆）",
+ "live_focus_sec": 10,
+ "_live_focus_sec": "重點股（成交金額前 N 名＋自選＋策略清單）幾秒更新一次",
+ "live_full_sec": 60,
+ "_live_full_sec": "其他股票大約幾秒輪一次",
+ "live_focus_top": 150,
+ "live_min_gap_sec": 1.5,
+ "_live_min_gap_sec": "盤中兩個請求之間至少間隔幾秒（不要調太小，以免被暫時封鎖）",
+ "pe_trading_days": 245,
+ "_pe_trading_days": "本益比／殖利率／淨值比往回抓幾天",
+ "revenue_months": 26,
+ "fin_quarters": 10
+}

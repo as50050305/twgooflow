@@ -1,0 +1,19 @@
+# 資料與紀錄：每台電腦自己抓，檔案很大（history.js 30 MB、raw 數百 MB），不要上傳
+data/
+logs/
+*.log
+*.tmp
+running.lock
+
+# Python 暫存
+__pycache__/
+*.pyc
+
+# 舊版開發檔與多出來的副本
+_dev/
+twflow/
+
+# 系統檔
+Thumbs.db
+desktop.ini
+.DS_Store
