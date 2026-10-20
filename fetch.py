@@ -40,7 +40,7 @@ SECTORS_PATH = os.path.join(BASE_DIR, "sectors.csv")
 CALENDAR_PATH = os.path.join(DATA_DIR, "calendar.json")
 UNIVERSE_PATH = os.path.join(DATA_DIR, "universe.json")
 
-PARSER_VERSION = 8  # 正規化格式有變動時遞增，舊的 days\*.json 會自動重算（v8：發行股數、外資持股）
+PARSER_VERSION = 9  # 正規化格式有變動時遞增，舊的 days\*.json 會自動重算（v8：發行股數、外資持股；v9：大盤融資餘額）
 
 DEFAULT_CONFIG = {
     "backfill_trading_days": 60,
@@ -63,6 +63,8 @@ DEFAULT_CONFIG = {
     "mops_base": "https://mopsov.twse.com.tw",
     "tdcc_url": "https://opendata.tdcc.com.tw/getOD.ashx?id=1-5",   # 集保戶股權分散表（每週，只有最新一週）
     "chips_weeks": 52,                # 集保股權分散保留幾週
+    "taifex_base": "https://www.taifex.com.tw",
+    "market_months": 25,              # 大盤／台指期頁：指數 K 線、台指期、期貨法人往回抓幾個月
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
 }
 
@@ -647,6 +649,33 @@ def parse_twse_margin(j):
     return out
 
 
+def margin_total_twse(j):
+    """上市信用交易統計：融資餘額（張）、融資金額（億）與前日值"""
+    t = tbl_find(j, lambda t: (t.get("fields") or [None])[0] == "項目")
+    if not t:
+        return None
+    out = {}
+    for r in t.get("data") or []:
+        k = str(r[0]).strip()
+        if k.startswith("融資(交易單位)"):
+            out["bal"], out["prev"] = num(r[5]), num(r[4])
+        elif k.startswith("融資金額"):
+            out["amt"], out["amt_prev"] = r2((num(r[5]) or 0) / 1e5), r2((num(r[4]) or 0) / 1e5)   # 仟元 → 億
+    return out if "bal" in out else None
+
+
+def margin_total_tpex(j):
+    t = j["tables"][0]
+    out = {}
+    for r in t.get("summary") or []:
+        k = str(r[1]).strip() if len(r) > 1 else ""
+        if k.startswith("合計"):
+            out["bal"], out["prev"] = num(r[6]), num(r[2])
+        elif k.startswith("融資金"):
+            out["amt"], out["amt_prev"] = r2((num(r[6]) or 0) / 1e5), r2((num(r[2]) or 0) / 1e5)
+    return out if "bal" in out else None
+
+
 def parse_twse_bfi(j):
     res = {"fi": 0.0, "it": 0.0, "dsf": 0.0, "dsh": 0.0, "total": 0.0}
     for r in j.get("data") or []:
@@ -792,6 +821,15 @@ def parse_tpex_sum(j):
     return res
 
 
+def safe_call(fn, j):
+    if not j:
+        return None
+    try:
+        return fn(j)
+    except Exception:
+        return None
+
+
 def build_day(d, uni):
     """把一天的原始檔整理成 days\\YYYYMMDD.json"""
     ymd = d.strftime("%Y%m%d")
@@ -872,6 +910,7 @@ def build_day(d, uni):
             "inst_official": official, "inst_estimated": check,
             "has_margin": {"TWSE": tm is not None, "TPEX": pm is not None},
             "has_qfii": {"TWSE": bool(qf["TWSE"]), "TPEX": bool(qf["TPEX"])},
+            "margin": {"TWSE": safe_call(margin_total_twse, raw["twse_margin"]), "TPEX": safe_call(margin_total_tpex, raw["tpex_margin"])},
         },
         "stocks": stocks,
         "names": extra_names,
@@ -1476,6 +1515,241 @@ def build_chips(cfg):
         log(f"  ! chips.js 產生失敗：{e}")
 
 
+# ----------------------------------------------------------------- 大盤與台指期（每月一批）
+MKT_DIR = os.path.join(RAW_DIR, "_market")
+TX_MONTH_RE = re.compile(r"^\d{6}$")
+
+
+def roc_ymd(s):
+    """'115/10/01' 或 '2026/10/01' → '20261001'"""
+    a = str(s).strip().split("/")
+    if len(a) != 3:
+        return None
+    y = int(a[0]) + (1911 if int(a[0]) < 1000 else 0)
+    return f"{y:04d}{int(a[1]):02d}{int(a[2]):02d}"
+
+
+def csv_rows(text):
+    if not text or text.lstrip().startswith("<"):
+        return None             # 期交所錯誤時回傳的是 HTML（alert 訊息）
+    return [r for r in csv.reader(text.lstrip("\ufeff").splitlines()) if r]
+
+
+def market_items(cfg, y, m, today):
+    """每個月要抓的項目：key → (說明, 方法, URL, POST 資料, 編碼, 檢查函式)"""
+    tw, tp, tf = cfg["twse_base"], cfg["tpex_base"], cfg["taifex_base"]
+    first = dt.date(y, m, 1)
+    last = (dt.date(y + (m == 12), m % 12 + 1, 1) - dt.timedelta(days=1))
+    end = min(last, today)
+    s1, e1 = first.strftime("%Y/%m/%d"), end.strftime("%Y/%m/%d")
+    ok_tw = lambda j: ok_twse(j) and bool(j.get("data"))
+    ok_tp = lambda j: str(j.get("stat", "")).lower() == "ok" and any((t.get("data") or []) for t in j.get("tables") or [])
+    return {
+        "twse_ohlc": ("加權指數 OHLC MI_5MINS_HIST", f"{tw}/rwd/zh/TAIEX/MI_5MINS_HIST?date={first:%Y%m%d}&response=json", None, "json", ok_tw),
+        "twse_fmt": ("上市成交金額 FMTQIK", f"{tw}/rwd/zh/afterTrading/FMTQIK?date={first:%Y%m%d}&response=json", None, "json", ok_tw),
+        "tpex_inx": ("櫃買指數 OHLC indexInfo/inx", f"{tp}/www/zh-tw/indexInfo/inx?date={first:%Y/%m/%d}&response=json", None, "json", ok_tp),
+        "tpex_trd": ("上櫃成交金額 tradingIndex", f"{tp}/www/zh-tw/afterTrading/tradingIndex?date={first:%Y/%m/%d}&response=json", None, "json", ok_tp),
+        "fut_tx": ("台指期行情 futDataDown", f"{tf}/cht/3/futDataDown",
+                   {"down_type": "1", "commodity_id": "TX", "commodity_id2": "", "queryStartDate": s1, "queryEndDate": e1}, "csv", None),
+        "fut_inst": ("台指期三大法人 futContractsDateDown", f"{tf}/cht/3/futContractsDateDown",
+                     {"queryStartDate": s1, "queryEndDate": e1, "commodityId": "TXF"}, "csv", None),
+        "fut_large": ("台指期大額交易人 largeTraderFutDown", f"{tf}/cht/3/largeTraderFutDown",
+                      {"queryStartDate": s1, "queryEndDate": e1}, "csv", None),
+    }
+
+
+def fetch_market(fx, cfg):
+    """大盤指數 K 線、成交金額、台指期行情、期貨三大法人、大額交易人：一個月一批。
+    已結束的月份抓過一次就不再抓；本月（與月初幾天的上個月）每次執行都重抓。"""
+    os.makedirs(MKT_DIR, exist_ok=True)
+    today = now_tw().date()
+    n = int(cfg.get("market_months", 25))
+    months = []
+    y, m = today.year, today.month
+    for _ in range(n):
+        months.append((y, m))
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    log("更新大盤指數與台指期資料（證交所、櫃買、期交所）…")
+    fails, got = 0, 0
+    for (y, m) in months:
+        month_end = dt.date(y + (m == 12), m % 12 + 1, 1)
+        done_cut = (dt.datetime(month_end.year, month_end.month, month_end.day, 22) - dt.timedelta(hours=8)).replace(tzinfo=dt.timezone.utc).timestamp()
+        for key, (lab, url, data, kind, ok) in market_items(cfg, y, m, today).items():
+            p = os.path.join(MKT_DIR, f"{y:04d}{m:02d}_{key}.json")
+            if raw_exists(p) and raw_mtime(p) >= done_cut:
+                continue                         # 這個月已結束且是月底後才抓的 → 完整
+            touch_lock()
+            try:
+                if kind == "json":
+                    j = parse_json_body(fx.get(url, referer=url.split("/rwd/")[0].split("/www/")[0] + "/"))
+                    if not (j and ok(j)):
+                        continue
+                    save_raw(p, j)
+                else:
+                    text = fx.get(url, referer=cfg["taifex_base"] + "/cht/3/dlFutDailyMarketView", encoding="cp950", data=data)
+                    rows = csv_rows(text)
+                    if rows is None or len(rows) < 2:
+                        continue
+                    if key == "fut_large":
+                        rows = [rows[0]] + [r for r in rows[1:] if len(r) > 1 and r[1].strip() == "TX"]
+                    elif key == "fut_tx":
+                        rows = [rows[0]] + [r for r in rows[1:] if len(r) > 2 and TX_MONTH_RE.match(r[2].strip())]
+                    save_raw(p, {"rows": rows})
+                got += 1
+                fails = 0
+            except Exception as e:
+                fails += 1
+                log(f"  ! {y}{m:02d} {lab} 失敗，下次再抓：{e}")
+                if fails >= 5:
+                    log("  ! 連續 5 次失敗，大盤／台指期資料這次先停止")
+                    return
+    log(f"  大盤／台指期資料：這次抓了 {got} 批")
+
+
+def load_month(key):
+    out = []
+    if not os.path.isdir(MKT_DIR):
+        return out
+    for f in sorted(os.listdir(MKT_DIR)):
+        mt = re.match(r"^(\d{6})_" + key + r"\.json", f)
+        if mt:
+            j = load_json(os.path.join(MKT_DIR, f[:-3] if f.endswith(".gz") else f))
+            if j:
+                out.append((mt.group(1), j))
+    return out
+
+
+def build_market(cfg):
+    """data\\market.js：大盤（加權、櫃買）日 K 與成交金額、三大法人、融資、漲跌家數；台指期近月日 K、期貨法人未平倉、大額交易人"""
+    try:
+        idx = {}
+        # 指數 OHLC
+        for mk, key, conv in (("twse", "twse_ohlc", None), ("tpex", "tpex_inx", None)):
+            rows = {}
+            for ym, j in load_month(key):
+                t = j if key == "twse_ohlc" else j["tables"][0]
+                for r in t.get("data") or []:
+                    d = roc_ymd(r[0])
+                    if d and num(r[4]):
+                        rows[d] = [num(r[1]), num(r[2]), num(r[3]), num(r[4])]
+            idx[mk] = rows
+        # 成交金額（億）
+        val = {"twse": {}, "tpex": {}}
+        for ym, j in load_month("twse_fmt"):
+            for r in j.get("data") or []:
+                d = roc_ymd(r[0])
+                if d:
+                    val["twse"][d] = r2((num(r[2]) or 0) / 1e8)
+        for ym, j in load_month("tpex_trd"):
+            for r in j["tables"][0].get("data") or []:
+                d = roc_ymd(r[0])
+                if d:
+                    val["tpex"][d] = r2((num(r[2]) or 0) / 1e5)          # 仟元 → 億
+        out_idx = {}
+        for mk in ("twse", "tpex"):
+            ds = sorted(idx[mk])
+            out_idx[mk] = {"d": ds, "o": [idx[mk][d][0] for d in ds], "h": [idx[mk][d][1] for d in ds], "l": [idx[mk][d][2] for d in ds],
+                           "c": [idx[mk][d][3] for d in ds], "val": [val[mk].get(d) for d in ds]}
+        # 每日：三大法人、融資、漲跌家數（來自 days）
+        files = sorted(f[:-5] for f in os.listdir(DAY_DIR) if f.endswith(".json"))[-int(cfg.get("history_trading_days", 490)):]
+        daily = {"d": [], "twse": {"fi": [], "it": [], "dsf": [], "dsh": [], "est": [], "mbal": [], "mamt": [], "ud": []},
+                 "tpex": {"fi": [], "it": [], "dsf": [], "dsh": [], "est": [], "mbal": [], "mamt": [], "ud": []}}
+        for f in files:
+            dd = load_json(os.path.join(DAY_DIR, f + ".json"))
+            if not dd:
+                continue
+            mkd = dd.get("market") or {}
+            daily["d"].append(f)
+            for mk, MK in (("twse", "TWSE"), ("tpex", "TPEX")):
+                off = (mkd.get("inst_official") or {}).get(MK)
+                est = (mkd.get("inst_estimated") or {}).get(MK)
+                src = off or est or {}
+                for k in ("fi", "it", "dsf", "dsh"):
+                    daily[mk][k].append(src.get(k))
+                daily[mk]["est"].append(0 if off else 1 if est else None)
+                mg = (mkd.get("margin") or {}).get(MK) or {}
+                daily[mk]["mbal"].append(ir(mg.get("bal")) if mg.get("bal") is not None else None)
+                daily[mk]["mamt"].append(mg.get("amt"))
+                ud = mkd.get("updown_twse" if mk == "twse" else "updown_tpex")
+                daily[mk]["ud"].append([ud.get("up"), ud.get("down"), ud.get("flat"), ud.get("limit_up"), ud.get("limit_down")] if ud else None)
+        # 台指期：近月（一般交易時段）＋同一契約的夜盤
+        tx = {}
+        for ym, j in load_month("fut_tx"):
+            rows = j["rows"]
+            hd = [x.strip() for x in rows[0]]
+            ci = {k: hd.index(k) for k in ("交易日期", "到期月份(週別)", "開盤價", "最高價", "最低價", "收盤價", "成交量", "結算價", "未沖銷契約數", "交易時段")}
+            for r in rows[1:]:
+                if len(r) <= ci["交易時段"]:
+                    continue
+                d = roc_ymd(r[ci["交易日期"]]); mon = r[ci["到期月份(週別)"]].strip(); ses = r[ci["交易時段"]].strip()
+                if not d or not TX_MONTH_RE.match(mon):
+                    continue
+                rec = [num(r[ci[k]]) for k in ("開盤價", "最高價", "最低價", "收盤價", "成交量", "結算價", "未沖銷契約數")]
+                tx.setdefault(d, {}).setdefault(mon, {})["day" if ses == "一般" else "night"] = rec
+        txo = {"d": [], "m": [], "o": [], "h": [], "l": [], "c": [], "vol": [], "settle": [], "oi": [], "n": []}
+        for d in sorted(tx):
+            cands = [mon for mon, v in tx[d].items() if v.get("day") and v["day"][3]]
+            if not cands:
+                continue
+            mon = min(cands)
+            day, night = tx[d][mon]["day"], tx[d][mon].get("night")
+            txo["d"].append(d); txo["m"].append(mon)
+            for k, v in zip(("o", "h", "l", "c", "vol", "settle", "oi"), day):
+                txo[k].append(v)
+            txo["n"].append(night[:5] if night and night[3] else None)
+        # 期貨三大法人（臺股期貨）
+        fi = {}
+        for ym, j in load_month("fut_inst"):
+            rows = j["rows"]; hd = [x.strip() for x in rows[0]]
+            g = lambda r, k: num(r[hd.index(k)]) if k in hd else None
+            for r in rows[1:]:
+                if len(r) < len(hd) - 1:
+                    continue
+                d = roc_ymd(r[0]); who = r[2].strip()
+                key = "fi" if who.startswith("外資") else "it" if who.startswith("投信") else "dl" if who.startswith("自營") else None
+                if not d or not key:
+                    continue
+                fi.setdefault(d, {})[key] = [g(r, "多空交易口數淨額"), g(r, "多空未平倉口數淨額"), r2((g(r, "多空未平倉契約金額淨額(千元)") or 0) / 1e5)]
+        fio = {"d": sorted(fi)}
+        for key in ("fi", "it", "dl"):
+            fio[key] = [fi[d].get(key) for d in fio["d"]]           # [交易淨口數, 未平倉淨口數, 未平倉淨金額（億）]
+        # 大額交易人（臺股期貨 TX＋MTX/4＋TMF/20）
+        lg = {}
+        for ym, j in load_month("fut_large"):
+            for r in j["rows"][1:]:
+                if len(r) < 10:
+                    continue
+                d = roc_ymd(r[0]); mon = r[3].strip(); kind = r[4].strip()
+                if not d or not TX_MONTH_RE.match(mon) or mon == "666666":
+                    continue
+                v = [num(x) for x in r[5:10]]          # 前五大買、前五大賣、前十大買、前十大賣、全市場未沖銷
+                slot = "all" if mon == "999999" else "near"
+                cur = lg.setdefault(d, {})
+                if slot == "near":
+                    if "nearMon" in cur and cur["nearMon"] < mon:
+                        continue
+                    if cur.get("nearMon") != mon:
+                        cur["nearMon"] = mon; cur.pop("near0", None); cur.pop("near1", None)
+                cur[slot + kind] = v
+        lgo = {"d": sorted(lg)}
+        for k in ("all0", "all1", "near0", "near1"):
+            lgo[k] = [lg[d].get(k) for d in lgo["d"]]
+        out = {"generated": now_tw().isoformat(timespec="seconds"), "idx": out_idx, "daily": daily, "tx": txo, "finst": fio, "large": lgo}
+        p = os.path.join(DATA_DIR, "market.js")
+        tmp = f"{p}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("window.TWFLOW_MARKET=")
+            json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
+            f.write(";\n")
+        os.replace(tmp, p)
+        log(f"已輸出 data\\market.js：加權 {len(out_idx['twse']['d'])} 天、櫃買 {len(out_idx['tpex']['d'])} 天、台指期 {len(txo['d'])} 天、"
+            f"期貨法人 {len(fio['d'])} 天、大額交易人 {len(lgo['d'])} 天，{os.path.getsize(p) / 1e6:.2f} MB")
+    except Exception as e:
+        import traceback
+        log(f"  ! market.js 產生失敗：{e}")
+        log(traceback.format_exc())
+
+
 def sync_mobile(cfg):
     target = os.path.expandvars((cfg.get("mobile_sync_dir") or "").strip())
     if not target:
@@ -1499,6 +1773,10 @@ def sync_mobile(cfg):
         if os.path.exists(fp):
             with open(fp, "r", encoding="ascii") as f:
                 page = page.replace("<!--FUND-->", "<script>" + f.read() + "</script>")
+        mp = os.path.join(DATA_DIR, "market.js")
+        if os.path.exists(mp):
+            with open(mp, "r", encoding="utf-8") as f:
+                page = page.replace("<!--MARKET-->", "<script>" + f.read().replace("</script", "<\\/script") + "</script>")
         cp = os.path.join(DATA_DIR, "chips.js")
         if os.path.exists(cp):
             with open(cp, "r", encoding="ascii") as f:
@@ -1615,9 +1893,11 @@ def main():
             build_fund(cfg)
             fetch_tdcc(fx, cfg)
             build_chips(cfg)
+            fetch_market(fx, cfg)
             fetch_exrights(fx, cfg, now_tw().date() - dt.timedelta(days=int(cfg.get("history_trading_days", 245) * 1.5) + 10))
             sync(cfg, fx, uni)
         build_history(cfg, uni)
+        build_market(cfg)
         if a.rebuild:
             build_fund(cfg)
             build_chips(cfg)

@@ -250,6 +250,7 @@ tr.newrow td{ background:color-mix(in srgb, var(--up) 10%, transparent); animati
 <!--HISTORY-->
 <!--FUND-->
 <!--CHIPS-->
+<!--MARKET-->
 <script>
 'use strict';
 /* ================= 基本工具 ================= */
@@ -968,12 +969,12 @@ function drawKline(container, cfg) {
   // 成交量
   let vmax = 1; for (const k of vis) vmax = Math.max(vmax, B[k].vol || 0);
   const vb = top.v + hV; svg.appendChild(s('line', { x1: pad.l, x2: W - pad.r, y1: vb, y2: vb, class: 'ax' }));
-  svg.appendChild(s('text', { x: W - pad.r + 5, y: top.v + 9 }, fmtBig(vmax))); svg.appendChild(s('text', { x: W - pad.r + 5, y: vb - 1 }, '張'));
+  svg.appendChild(s('text', { x: W - pad.r + 5, y: top.v + 9 }, fmtBig(vmax))); svg.appendChild(s('text', { x: W - pad.r + 5, y: vb - 1 }, cfg.volUnit || '張'));
   for (const k of vis) { const b = B[k], hh = (b.vol || 0) / vmax * (hV - 4); g.appendChild(s('rect', { x: X(k) - cw / 2, y: vb - hh, width: cw, height: hh, fill: b.c >= b.o ? 'var(--up)' : 'var(--down)', opacity: 0.55 })); }
   // 法人
   if (hI) { let im = 0.01; for (const k of vis) im = Math.max(im, Math.abs(B[k].inst || 0)); const z = top.i + hI / 2;
     svg.appendChild(s('line', { x1: pad.l, x2: W - pad.r, y1: z, y2: z, class: 'ax' })); svg.appendChild(s('text', { x: W - pad.r + 5, y: top.i + 9 }, '+' + fmtYi(im))); svg.appendChild(s('text', { x: W - pad.r + 5, y: top.i + hI }, '−' + fmtYi(im)));
-    svg.appendChild(s('text', { x: pad.l + 2, y: top.i + 9, class: 'qcnt' }, '法人（億）'));
+    svg.appendChild(s('text', { x: pad.l + 2, y: top.i + 9, class: 'qcnt' }, cfg.instLabel || '法人（億）'));
     for (const k of vis) { const v = B[k].inst; if (v == null) continue; const hh = Math.abs(v) / im * (hI / 2 - 2); g.appendChild(s('rect', { x: X(k) - cw / 2, y: v >= 0 ? z - hh : z, width: cw, height: Math.max(0.5, hh), fill: v >= 0 ? 'var(--up)' : 'var(--down)', opacity: 0.8 })); } }
   // 動能
   if (hS) { let smin = Infinity, smax = -Infinity; for (const k of vis) { const v = B[k].sc; if (v != null && isFinite(v)) { smin = Math.min(smin, v); smax = Math.max(smax, v); } }
@@ -1006,7 +1007,8 @@ function drawKline(container, cfg) {
     showTip(container, tip, x * rc.width / W, top.p * rc.height / H + 20, [
       h('div', { style: { fontWeight: 650 } }, fmtK(b.d, cfg.period, true)),
       tipRow('開／高', fmt.px(b.o) + '／' + fmt.px(b.h)), tipRow('低／收', fmt.px(b.l) + '／' + fmt.px(b.c)), tipRow('漲跌', isNaN(chg) ? '—' : fmt.pct(chg), cls(chg)),
-      tipRow('成交量', Math.round(b.vol || 0).toLocaleString('en-US') + ' 張'), b.inst != null ? tipRow('法人', fmt.yiu(b.inst), cls(b.inst)) : null,
+      tipRow(cfg.volName || '成交量', b.vol == null ? '—' : cfg.volFmt ? cfg.volFmt(b.vol) : Math.round(b.vol || 0).toLocaleString('en-US') + ' 張'), b.inst != null ? tipRow(cfg.instName || '法人', cfg.instFmt ? cfg.instFmt(b.inst) : fmt.yiu(b.inst), cls(b.inst)) : null,
+      ...(cfg.tipExtra ? cfg.tipExtra(b) : []),
       b.sc != null && isFinite(b.sc) ? tipRow(cfg.scoreLabel || '動能', b.sc.toFixed(1)) : null,
       ...cfg.ma.map(m => MA[m][k] != null ? tipRow(m + ' 均', fmt.px(+MA[m][k].toFixed(2))) : null),
       ...(markAt.get(k) || []).map(m => tipRow(m.type === 'buy' ? '回測買進' : '回測賣出', m.label || '', m.type === 'buy' ? 'up' : 'down'))]); };
@@ -1510,7 +1512,7 @@ function buildShell() {
         h('button', { class: 'iconbtn', title: '設定', 'aria-label': '設定', onclick: openSettings }, icon('gear')),
       ),
       h('nav', { class: 'tabs', id: 'tabs' },
-        [['overview', '總覽'], ['live', '盤中'], ['mom', '動能'], ['rank', '排行'], ['flows', '法人動向'], ['watch', '自選'], ['help', '說明']].map(([k, l]) => h('a', { href: '#' + k, 'data-k': k }, l)))),
+        [['overview', '總覽'], ['market', '大盤'], ['live', '盤中'], ['mom', '動能'], ['rank', '排行'], ['flows', '法人動向'], ['watch', '自選'], ['help', '說明']].map(([k, l]) => h('a', { href: '#' + k, 'data-k': k }, l)))),
     h('main', { id: 'main' }),
     h('div', { id: 'overlay' }));
   $('#dateSel').value = App.t; $('#basisSel').value = S.basis;
@@ -1543,11 +1545,11 @@ function updateChips() {
 /* ---------- 路由 ---------- */
 function parseRoute() { const hs = location.hash.replace(/^#/, ''); const [r, a] = hs.split('/'); App.route = r || 'overview'; App.arg = a ? decodeURIComponent(a) : null; }
 function render() {
-  stopPlay(); stopStockPlay(); App.stockLive = null;
+  stopPlay(); stopStockPlay(); App.stockLive = null; App.redrawMarket = null; App.liveMarket = null;
   parseRoute(); if (typeof momSync === 'function') momSync(); updateChips(); updateBell();
   $$('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.k === App.route || (App.route === 'stock' && a.dataset.k === 'watch' && false)));
   const main = $('#main'); main.replaceChildren();
-  const fn = { overview: viewOverview, live: viewLive, mom: viewMom, rank: viewRank, flows: viewFlows, watch: viewWatch, stock: viewStock, help: viewHelp }[App.route] || viewOverview;
+  const fn = { overview: viewOverview, market: viewMarket, live: viewLive, mom: viewMom, rank: viewRank, flows: viewFlows, watch: viewWatch, stock: viewStock, help: viewHelp }[App.route] || viewOverview;
   fn(main);
   if (App.route !== 'stock') window.scrollTo(0, 0);
 }
@@ -2103,7 +2105,7 @@ function boot() {
   }
   initModel(); App.t = M.T - 1; buildShell();
   window.addEventListener('hashchange', render);
-  let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (App.route === 'overview' && App.drawBub) App.drawBub(); else if (App.route === 'stock' && App.redrawStock) App.redrawStock(); }, 150); });
+  let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (App.route === 'overview' && App.drawBub) App.drawBub(); else if (App.route === 'stock' && App.redrawStock) App.redrawStock(); else if (App.route === 'market' && App.redrawMarket) App.redrawMarket(); }, 150); });
   render();
   startLive();
   initLiveDetect();
@@ -2697,6 +2699,7 @@ async function pollLive() {
     else if (momNew) liveMomRedraw();
     else if (App.route === 'mom' && App.momTab === 'pick' && App.redrawPick) App.redrawPick();
     stockLiveTick();
+    if (App.route === 'market' && App.liveMarket) App.liveMarket();
     updateBell();
   } catch (e) { LIVE.ok = false; LIVE.err = e; if (App.route === 'live' && App.drawLive) App.drawLive(); }
 }
@@ -3040,6 +3043,7 @@ function klineDaily(code) {
   }
   return out;
 }
+const cfg_lastInst = b => !!b.instLevel;   // 未平倉之類的「存量」：週／月 K 取最後一天，不加總
 function klineAgg(bars, period) {
   if (period === 'D') return bars;
   const key = d => { if (period === 'M') return d.slice(0, 6); const dt = new Date(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8)); const day = (dt.getDay() + 6) % 7; dt.setDate(dt.getDate() - day); return dt.toISOString().slice(0, 10); };
@@ -3048,7 +3052,7 @@ function klineAgg(bars, period) {
     const k = key(b.d);
     if (k !== ck) { cur = { ...b, inst: b.inst, aci: null, acm: null }; out.push(cur); ck = k; continue; }
     cur.h = Math.max(cur.h, b.h); cur.l = Math.min(cur.l, b.l); cur.c = b.c; cur.d = b.d; cur.vol += b.vol;
-    cur.inst = cur.inst == null && b.inst == null ? null : (cur.inst || 0) + (b.inst || 0); cur.sc = b.sc; cur.live = b.live;
+    cur.inst = cur.inst == null && b.inst == null ? null : (cfg_lastInst(b) ? b.inst : (cur.inst || 0) + (b.inst || 0)); cur.sc = b.sc; cur.live = b.live; if (b.x) cur.x = b.x;
   }
   return out;
 }
@@ -3179,6 +3183,282 @@ function revChartDraw(el, rows, W) {
   svg.appendChild(s('text', { x: W - pad.r + 4, y: Y(yhi) + 10 }, Math.round(yhi) + '%')); svg.appendChild(s('text', { x: W - pad.r + 4, y: Y(0) + 4 }, '0%'));
   el.appendChild(svg);
   el.appendChild(h('div', { class: 'legend' }, h('span', null, h('i', { class: 'box', style: { background: 'var(--up)', opacity: .45 } }), '營收（年增為正）'), h('span', null, h('i', { class: 'box', style: { background: 'var(--down)', opacity: .45 } }), '營收（年增為負）'), h('span', null, h('i', { style: { background: 'var(--accent)' } }), '年增率')));
+}
+
+/* ================= 大盤（加權、櫃買）與台指期 ================= */
+const MKT = { status: 'idle', data: null, err: null, promise: null };
+function loadMarket() {
+  if (MKT.promise) return MKT.promise;
+  MKT.status = 'loading';
+  MKT.promise = (async () => {
+    if (!window.TWFLOW_MARKET) await new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'data/market.js'; sc.onload = res; sc.onerror = () => { sc.remove(); rej(new Error('找不到 data/market.js（下次 run.bat 執行後會產生；第一次約多 15 分鐘）')); }; document.head.appendChild(sc); });
+    MKT.data = window.TWFLOW_MARKET; MKT.status = 'ready';
+  })().catch(e => { MKT.status = 'error'; MKT.err = e; MKT.promise = null; throw e; });
+  return MKT.promise;
+}
+App.mkTab = App.mkTab || LS.get('mkTab', 'twse');
+App.mkK = App.mkK || { period: 'D', range: 130, night: false };
+const MK_NAME = { twse: '加權指數', tpex: '櫃買指數', tx: '台指期（近月）' };
+const MK_LIVE = { twse: 't00', tpex: 'o00' };
+const yiTxt = v => v == null || !isFinite(v) ? '—' : fmt.yi(v, 1) + ' 億';
+const kouTxt = v => v == null || !isFinite(v) ? '—' : fmt.sint(v) + ' 口';
+
+function viewMarket(main) {
+  main.append(h('div', { class: 'row', style: { marginBottom: '.8rem', alignItems: 'center' } },
+    seg([['twse', '加權指數'], ['tpex', '櫃買指數'], ['tx', '台指期']], App.mkTab, v => { App.mkTab = v; LS.set('mkTab', v); render(); }),
+    h('span', { class: 'small muted' }, App.mkTab === 'tx' ? '期交所每日行情、三大法人未平倉、大額交易人' : '證交所／櫃買中心每日指數、成交金額、三大法人、融資、漲跌家數')));
+  if (MKT.status !== 'ready') {
+    main.append(card(MK_NAME[App.mkTab], null, h('p', { class: 'small muted' }, MKT.status === 'error' ? MKT.err.message : '載入中…')));
+    if (MKT.status !== 'error') loadMarket().then(() => { if (App.route === 'market') render(); }, () => { if (App.route === 'market') render(); });
+    return;
+  }
+  if (App.mkTab === 'tx') viewTx(main); else viewIndex(main, App.mkTab);
+}
+
+/* ---------- 共用：通用 K 線卡 ---------- */
+function mkKlineCard(getBars, o) {
+  const K = App.mkK, box = h('div'), chart = h('div'), zoom = h('div', { class: 'zoomctl inline', role: 'group', 'aria-label': '縮放' });
+  const ranges = { D: [['66', '3 月'], ['130', '半年'], ['250', '1 年'], ['all', '全部']], W: [['52', '1 年'], ['all', '全部']], M: [['all', '全部']] };
+  let bars = [], view = null;
+  const build = () => { bars = klineAgg(getBars(), K.period); const r = K.period === 'D' ? K.range : K.period === 'W' ? 52 : 'all'; const n = bars.length, len = r === 'all' ? n : Math.min(n, +r); view = { s: n - len, e: n }; };
+  const draw = () => {
+    if (!bars.length) { chart.replaceChildren(h('div', { class: 'empty' }, '還沒有資料（下次 run.bat 執行後會補）')); return; }
+    drawKline(chart, { bars, ma: S.k.ma, show: { inst: S.k.inst && o.inst !== false, score: false }, thr: 0, view, period: K.period, zoomBox: zoom, label: o.label,
+      volUnit: o.volUnit, volName: o.volName, volFmt: o.volFmt, instLabel: o.instLabel, instName: o.instName, instFmt: o.instFmt, tipExtra: o.tipExtra });
+  };
+  const toolbar = () => h('div', { class: 'row', style: { marginBottom: '.5rem', alignItems: 'center' } },
+    seg([['D', '日 K'], ['W', '週 K'], ['M', '月 K']], K.period, v => { K.period = v; build(); render_(); }),
+    K.period !== 'M' ? seg(ranges[K.period], String(K.period === 'D' ? K.range : 52), v => { if (K.period === 'D') K.range = v === 'all' ? 'all' : +v; build(); if (K.period === 'W' && v !== 'all') view.s = Math.max(0, view.e - +v); if (K.period === 'W' && v === 'all') view.s = 0; render_(); }) : null,
+    ...[5, 20, 60].map(m => h('label', { class: 'chk small' }, h('input', { type: 'checkbox', checked: S.k.ma.includes(m), onchange: e => { S.k.ma = e.target.checked ? [...S.k.ma, m].sort((a, b) => a - b) : S.k.ma.filter(x => x !== m); saveSettings(); draw(); } }), m + ' 日線')),
+    o.inst !== false ? h('label', { class: 'chk small' }, h('input', { type: 'checkbox', checked: S.k.inst, onchange: e => { S.k.inst = e.target.checked; saveSettings(); draw(); } }), o.instToggle || '法人') : null,
+    ...(o.tools ? o.tools(() => { build(); render_(); }) : []), zoom);
+  const render_ = () => { box.replaceChildren(toolbar(), chart, h('div', { class: 'legend', style: { marginTop: '.4rem' } },
+    h('span', null, h('i', { style: { background: 'var(--l3)' } }), '5 日線'), h('span', null, h('i', { style: { background: 'var(--l1)' } }), '20 日線'), h('span', null, h('i', { style: { background: 'var(--l2)' } }), '60 日線'),
+    o.note ? h('span', { class: 'tiny muted' }, o.note) : null),
+    h('div', { class: 'tiny muted', style: { marginTop: '.3rem' } }, '滑鼠滾輪或雙擊縮放、拖曳左右移動；手機兩指縮放、單指拖曳。')); if (box.isConnected) draw(); else requestAnimationFrame(draw); };
+  build(); render_();
+  box.redraw = () => draw();
+  return box;
+}
+
+/* ---------- 共用：多條線（同一個 y 軸）＋十字線提示 ---------- */
+function drawLines(container, cfg) {
+  // cfg: {dates, series:[{name,color,vals,dash}], fmtV, zero}
+  const tip = chartBox(container);
+  const old = container.querySelector('svg'); if (old) old.remove();
+  const D = cfg.dates, n = D.length; const emp = container.querySelector('.empty'); if (emp) emp.remove();
+  if (n < 2) { container.insertBefore(h('div', { class: 'empty' }, '資料不足'), tip); return; }
+  const W = Math.max(320, container.clientWidth), H = W < 600 ? 190 : 220, pad = { l: 8, r: W < 600 ? 58 : 66, t: 10, b: 22 };
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  let lo = Infinity, hi = -Infinity; for (const sr of cfg.series) for (const v of sr.vals) if (v != null && isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  if (!isFinite(lo)) { lo = 0; hi = 1; }
+  if (cfg.zero) { lo = Math.min(lo, 0); hi = Math.max(hi, 0); }
+  const pv = (hi - lo) * 0.08 || Math.abs(hi) * 0.05 || 1; lo -= pv; hi += pv;
+  const X = k => pad.l + (n === 1 ? iw / 2 : k / (n - 1) * iw), Y = v => pad.t + (hi - v) / (hi - lo) * ih;
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': cfg.label || '走勢圖' });
+  const st = niceStep((hi - lo) / 4);
+  for (let v = Math.ceil(lo / st) * st; v <= hi; v += st) { const y = Y(v); svg.appendChild(s('line', { x1: pad.l, x2: W - pad.r, y1: y, y2: y, class: Math.abs(v) < st / 1e6 ? 'ax' : 'gl' })); svg.appendChild(s('text', { x: W - pad.r + 6, y: y + 4 }, cfg.axisFmt ? cfg.axisFmt(v) : fmtBig(Math.abs(v)) === '0' ? '0' : (v < 0 ? '−' : '') + fmtBig(Math.abs(v)))); }
+  const every = Math.ceil(n / (W < 600 ? 5 : 8));
+  D.forEach((d, k) => { if ((n - 1 - k) % every === 0) svg.appendChild(s('text', { x: X(k), y: H - 6, 'text-anchor': 'middle' }, fmt.date(d))); });
+  for (const sr of cfg.series) { let d = ''; sr.vals.forEach((v, k) => { if (v == null || !isFinite(v)) return; d += (d && sr.vals[k - 1] != null ? 'L' : 'M') + X(k).toFixed(1) + ',' + Y(v).toFixed(1); });
+    if (d) svg.appendChild(s('path', { d, fill: 'none', stroke: sr.color, 'stroke-width': 2, 'stroke-dasharray': sr.dash || null, 'stroke-linejoin': 'round' }));
+    const lk = sr.vals.length - 1; if (sr.vals[lk] != null) svg.appendChild(s('circle', { cx: X(lk), cy: Y(sr.vals[lk]), r: 3.5, fill: sr.color, stroke: 'var(--surface)', 'stroke-width': 2 })); }
+  const cross = s('line', { y1: pad.t, y2: pad.t + ih, stroke: 'var(--ink-2)', 'stroke-width': 1, opacity: 0, 'pointer-events': 'none' }); svg.appendChild(cross);
+  const hit = s('rect', { x: pad.l, y: pad.t, width: iw, height: ih, fill: 'transparent' }); svg.appendChild(hit);
+  container.insertBefore(svg, tip);
+  hit.addEventListener('pointermove', ev => { const rc = svg.getBoundingClientRect(); const x = (ev.clientX - rc.left) * W / rc.width; const k = clamp(Math.round((x - pad.l) / iw * (n - 1)), 0, n - 1);
+    cross.setAttribute('x1', X(k)); cross.setAttribute('x2', X(k)); cross.setAttribute('opacity', 0.5);
+    showTip(container, tip, X(k) * rc.width / W, ev.clientY - rc.top, [h('div', { style: { fontWeight: 650 } }, fmt.fdate(D[k])),
+      ...cfg.series.map(sr => tipRow(sr.name, sr.vals[k] == null ? '—' : (cfg.fmtV ? cfg.fmtV(sr.vals[k], sr) : String(sr.vals[k])), sr.cls ? cls(sr.vals[k]) : '')), ...(cfg.tipExtra ? cfg.tipExtra(k) : [])]); });
+  hit.addEventListener('pointerleave', () => { cross.setAttribute('opacity', 0); hideTip(tip); });
+}
+function lineLegend(series) { return h('div', { class: 'legend', style: { marginTop: '.4rem' } }, series.map(sr => h('span', null, h('i', { style: { background: sr.color } }), sr.name))); }
+
+/* ---------- 共用：正負柱狀圖 ---------- */
+function drawDivBars(container, cfg) {
+  // cfg: {dates, vals, down (選用：第二組往下畫的值), fade:[bool], fmtV, tip(k)}
+  const tip = chartBox(container);
+  const old = container.querySelector('svg'); if (old) old.remove();
+  const D = cfg.dates, n = D.length; const emp = container.querySelector('.empty'); if (emp) emp.remove();
+  if (!n) { container.insertBefore(h('div', { class: 'empty' }, '資料不足'), tip); return; }
+  const W = Math.max(320, container.clientWidth), H = W < 600 ? 170 : 190, pad = { l: 8, r: W < 600 ? 50 : 58, t: 10, b: 22 };
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b, bw = iw / n;
+  const up = cfg.vals.map(v => v == null ? null : cfg.down ? v : v), dn = cfg.down || null;
+  let mx = 0.0001; for (let k = 0; k < n; k++) { if (up[k] != null) mx = Math.max(mx, Math.abs(up[k])); if (dn && dn[k] != null) mx = Math.max(mx, Math.abs(dn[k])); }
+  const z = pad.t + ih / 2, sc = (ih / 2 - 3) / mx, X = k => pad.l + bw * (k + 0.5);
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': cfg.label || '柱狀圖' });
+  svg.appendChild(s('line', { x1: pad.l, x2: W - pad.r, y1: z, y2: z, class: 'ax' }));
+  svg.appendChild(s('text', { x: W - pad.r + 6, y: pad.t + 9 }, (cfg.axisFmt || (v => '+' + fmtYi(v)))(mx))); svg.appendChild(s('text', { x: W - pad.r + 6, y: pad.t + ih }, dn ? (cfg.axisFmt || fmtYi)(mx) : '−' + fmtYi(mx)));
+  const w = Math.max(1, Math.min(12, bw * 0.7));
+  const bar = (k, v, forceDown) => { if (v == null || !v) return; const hh = Math.max(1, Math.abs(v) * sc); const isUp = !forceDown && v > 0;
+    svg.appendChild(s('path', { d: roundedBar(X(k) - w / 2, isUp ? z - hh : z, w, hh, isUp), fill: isUp ? 'var(--up)' : 'var(--down)', opacity: cfg.fade && cfg.fade[k] ? 0.4 : 0.85 })); };
+  for (let k = 0; k < n; k++) { bar(k, up[k], false); if (dn) bar(k, dn[k], true); }
+  const every = Math.ceil(n / (W < 600 ? 5 : 8));
+  D.forEach((d, k) => { if ((n - 1 - k) % every === 0) svg.appendChild(s('text', { x: X(k), y: H - 6, 'text-anchor': 'middle' }, fmt.date(d))); });
+  const hit = s('rect', { x: pad.l, y: pad.t, width: iw, height: ih, fill: 'transparent' }); svg.appendChild(hit);
+  container.insertBefore(svg, tip);
+  hit.addEventListener('pointermove', ev => { const rc = svg.getBoundingClientRect(); const x = (ev.clientX - rc.left) * W / rc.width; const k = clamp(Math.floor((x - pad.l) / bw), 0, n - 1);
+    showTip(container, tip, X(k) * rc.width / W, ev.clientY - rc.top, [h('div', { style: { fontWeight: 650 } }, fmt.fdate(D[k])), ...(cfg.tip ? cfg.tip(k) : [tipRow(cfg.name || '數值', cfg.fmtV(up[k]), cls(up[k]))])]); });
+  hit.addEventListener('pointerleave', () => hideTip(tip));
+}
+
+/* ---------- 指數（加權／櫃買） ---------- */
+function idxLive(mk) {
+  const snap = stockSnap(); if (!snap || !snap.index) return null;
+  const o = snap.index[MK_LIVE[mk]]; if (!o || !o.z || !o.d) return null;
+  const I = MKT.data.idx[mk]; if (I.d.length && o.d <= I.d[I.d.length - 1]) return null;   // 官方收盤資料已經有今天
+  return { d: o.d, o: o.o || o.y, h: Math.max(o.h || o.z, o.z), l: Math.min(o.l || o.z, o.z), c: o.z, y: o.y, t: o.t, off: !liveUp(), status: snap.status, bars: (snap.ibars || {})[MK_LIVE[mk]] };
+}
+function idxBars(mk) {
+  const M2 = MKT.data, I = M2.idx[mk], D = M2.daily, pos = new Map(D.d.map((d, k) => [d, k])), parts = BASIS[S.basis].parts, A = D[mk];
+  const bars = I.d.map((d, k) => { const j = pos.get(d); let inst = null, est = null;
+    if (j != null) { const v = parts.map(p => A[p][j]); if (v.every(x => x != null)) { inst = sum(v); est = A.est[j]; } }
+    return { d, o: I.o[k], h: I.h[k], l: I.l[k], c: I.c[k], vol: I.val[k], inst, x: { est } }; });
+  const lv = idxLive(mk); if (lv) bars.push({ d: lv.d, o: lv.o, h: lv.h, l: lv.l, c: lv.c, vol: null, inst: null, live: true, x: { live: true } });
+  return bars;
+}
+function drawIdxIntraday(container, arr, y) {
+  const tip = chartBox(container);
+  const old = container.querySelector('svg'); if (old) old.remove();
+  const pts = []; (arr || []).forEach((v, m) => { if (v != null) pts.push([m, v]); }); if (pts.length < 2) return;
+  const W = Math.max(320, container.clientWidth), H = 150, pad = { l: 8, r: 56, t: 8, b: 20 }, iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  let lo = Math.min(...pts.map(p => p[1]), y || Infinity), hi = Math.max(...pts.map(p => p[1]), y || -Infinity); const pv = (hi - lo) * 0.08 || 1; lo -= pv; hi += pv;
+  const X = m => pad.l + m / 270 * iw, Y = v => pad.t + (hi - v) / (hi - lo) * ih;
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': '今日分時' });
+  const st = niceStep((hi - lo) / 3); for (let v = Math.ceil(lo / st) * st; v <= hi; v += st) { svg.appendChild(s('line', { x1: pad.l, x2: W - pad.r, y1: Y(v), y2: Y(v), class: 'gl' })); svg.appendChild(s('text', { x: W - pad.r + 6, y: Y(v) + 4 }, fmt.px(+v.toFixed(2)))); }
+  for (const m of [0, 60, 120, 180, 240, 270]) svg.appendChild(s('text', { x: X(m), y: H - 5, 'text-anchor': m === 270 ? 'end' : m === 0 ? 'start' : 'middle' }, minLab(m)));
+  if (y) { svg.appendChild(s('line', { x1: pad.l, x2: W - pad.r, y1: Y(y), y2: Y(y), stroke: 'var(--muted)', 'stroke-dasharray': '4 3' })); svg.appendChild(s('text', { x: pad.l + 4, y: Y(y) - 4 }, '平盤')); }
+  const last = pts[pts.length - 1][1], col = !y || last >= y ? 'var(--up)' : 'var(--down)';
+  svg.appendChild(s('path', { d: pts.map((p, k) => (k ? 'L' : 'M') + X(p[0]).toFixed(1) + ',' + Y(p[1]).toFixed(1)).join(''), fill: 'none', stroke: col, 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+  const lp = pts[pts.length - 1]; svg.appendChild(s('circle', { cx: X(lp[0]), cy: Y(lp[1]), r: 3.5, fill: col, stroke: 'var(--surface)', 'stroke-width': 2 }));
+  const hit = s('rect', { x: pad.l, y: pad.t, width: iw, height: ih, fill: 'transparent' }); svg.appendChild(hit);
+  container.insertBefore(svg, tip);
+  hit.addEventListener('pointermove', ev => { const rc = svg.getBoundingClientRect(); const m = ((ev.clientX - rc.left) * W / rc.width - pad.l) / iw * 270;
+    let best = pts[0]; for (const p of pts) if (Math.abs(p[0] - m) < Math.abs(best[0] - m)) best = p;
+    showTip(container, tip, X(best[0]) * rc.width / W, ev.clientY - rc.top, [h('div', { style: { fontWeight: 650 } }, minLab(best[0])), tipRow('指數', fmt.px(best[1]), cls(best[1] - y)), tipRow('漲跌', y ? fmt.pct((best[1] / y - 1) * 100) : '—', cls(best[1] - y))]); });
+  hit.addEventListener('pointerleave', () => hideTip(tip));
+}
+
+function viewIndex(main, mk) {
+  const M2 = MKT.data, I = M2.idx[mk], D = M2.daily, A = D[mk];
+  if (!I.d.length) { main.append(card(MK_NAME[mk], null, h('p', { class: 'small muted' }, '還沒有指數資料：下次 run.bat 執行時會補抓最近約 2 年（第一次約多 15 分鐘）。'))); return; }
+  const n = I.d.length, lv = idxLive(mk);
+  const last = n - 1, prevC = n > 1 ? I.c[last - 1] : null;
+  const j = D.d.lastIndexOf(I.d[last]);
+  const head = h('div', { class: 'card' });
+  const intra = h('div', { class: 'chart' });
+  const drawHead = () => {
+    const L = idxLive(mk);
+    const c = L ? L.c : I.c[last], y = L ? L.y : prevC, chg = c != null && y ? c - y : null;
+    const instDay = j >= 0 ? BASIS[S.basis].parts.map(p => A[p][j]) : [];
+    const ud = j >= 0 ? A.ud[j] : null, mamt = j >= 0 ? A.mamt[j] : null, mprev = j > 0 ? A.mamt[j - 1] : null;
+    head.replaceChildren(
+      h('div', { class: 'stockhead' },
+        h('div', null, h('div', { class: 'nm' }, MK_NAME[mk]), h('div', { class: 'small ink2' }, L ? (L.off ? `${fmt.fdate(L.d)} 收盤（盤中服務記錄）` : `${LIVE_STATUS[L.status] || ''}・${L.t || ''}・每 10 秒更新`) : fmt.fdate(I.d[last]) + ' 收盤')),
+        h('div', null, h('div', { class: 'px num ' + cls(chg) }, fmt.px(c)), h('div', { class: 'num ' + cls(chg) }, chg == null ? '—' : `${chg > 0 ? '▲' : chg < 0 ? '▼' : ''}${fmt.px(Math.abs(+chg.toFixed(2)))}（${fmt.pct(chg / y * 100)}）`))),
+      h('div', { class: 'kv', style: { marginTop: '.7rem' } },
+        kv('成交金額', I.val[last] != null ? fmt.int(I.val[last]) + ' 億' : '—', null, fmt.date(I.d[last])),
+        kv(BASIS[S.basis].short, instDay.length && instDay.every(v => v != null) ? yiTxt(sum(instDay)) : '—', cls(sum(instDay.filter(v => v != null))), j >= 0 ? (A.est[j] ? '估算・' : '') + fmt.date(D.d[j]) : null),
+        kv('外資', j >= 0 ? yiTxt(A.fi[j]) : '—', cls(j >= 0 ? A.fi[j] : 0)), kv('投信', j >= 0 ? yiTxt(A.it[j]) : '—', cls(j >= 0 ? A.it[j] : 0)),
+        kv('自營商', j >= 0 && A.dsf[j] != null ? yiTxt(A.dsf[j] + (A.dsh[j] || 0)) : '—', cls(j >= 0 ? (A.dsf[j] || 0) + (A.dsh[j] || 0) : 0), '含避險'),
+        kv('融資餘額', mamt != null ? fmt.int(mamt) + ' 億' : '—', null, mamt != null && mprev != null ? h('span', { class: cls(mamt - mprev) }, (mamt - mprev > 0 ? '+' : '') + (mamt - mprev).toFixed(1) + ' 億') : null),
+        kv('漲／跌家數', ud ? `${ud[0]}／${ud[1]}` : '—', ud ? cls(ud[0] - ud[1]) : '', ud ? `漲停 ${ud[3] || 0}・跌停 ${ud[4] || 0}・平盤 ${ud[2] || 0}` : null)),
+      L && L.bars && L.bars.filter(v => v != null).length > 1 ? h('div', { style: { marginTop: '.6rem' } }, h('div', { class: 'small ink2' }, '今日分時'), intra) : null,
+      !L && !liveUp() && LIVE_MODE === false ? h('div', { class: 'tiny muted', style: { marginTop: '.5rem' } }, '盤中服務開著時，這裡會顯示即時指數與今日分時（平日 08:45～13:40）。') : null);
+    if (L && L.bars) requestAnimationFrame(() => drawIdxIntraday(intra, L.bars, L.y));
+  };
+  const kl = mkKlineCard(() => idxBars(mk), { label: MK_NAME[mk], volUnit: '億', volName: '成交金額', volFmt: v => fmt.int(v) + ' 億', instLabel: BASIS[S.basis].short + '（億）', instName: BASIS[S.basis].short, instFmt: v => fmt.yiu(v, 1),
+    instToggle: '法人', tipExtra: b => [b.x && b.x.est ? tipRow('法人金額', '估算（個股加總）') : null, b.x && b.x.live ? tipRow('今天', '盤中暫定') : null],
+    note: '法人柱：近 60 個交易日是官方金額，更早是個股買賣超 × 均價加總的估算。' });
+  // 三大法人
+  const instEl = h('div', { class: 'chart' }), instKv = h('div');
+  App.mkInst = App.mkInst || 'all'; App.mkN = App.mkN || 60;
+  const instSeries = k => App.mkInst === 'all' ? (BASIS[S.basis].parts.every(p => A[p][k] != null) ? sum(BASIS[S.basis].parts.map(p => A[p][k])) : null) : App.mkInst === 'ds' ? (A.dsf[k] == null ? null : A.dsf[k] + (A.dsh[k] || 0)) : A[App.mkInst][k];
+  const drawInst = () => {
+    const k0 = Math.max(0, D.d.length - App.mkN), ds = D.d.slice(k0), idx = ds.map((_, q) => k0 + q);
+    drawDivBars(instEl, { dates: ds, vals: idx.map(instSeries), fade: idx.map(k => A.est[k] === 1), label: '法人買賣超', tip: q => { const k = idx[q];
+      return [tipRow('外資', yiTxt(A.fi[k]), cls(A.fi[k])), tipRow('投信', yiTxt(A.it[k]), cls(A.it[k])), tipRow('自營（自行）', yiTxt(A.dsf[k]), cls(A.dsf[k])), tipRow('自營（避險）', yiTxt(A.dsh[k]), cls(A.dsh[k])), A.est[k] ? tipRow('金額', '估算') : null]; } });
+    const sumN = n2 => { let a = 0; for (let k = Math.max(0, D.d.length - n2); k < D.d.length; k++) a += instSeries(k) || 0; return a; };
+    instKv.replaceChildren(h('div', { class: 'kv', style: { marginTop: '.5rem' } }, kv('最新一天', yiTxt(instSeries(D.d.length - 1)), cls(instSeries(D.d.length - 1)), fmt.date(D.d[D.d.length - 1])), kv('近 5 日', yiTxt(sumN(5)), cls(sumN(5))), kv('近 20 日', yiTxt(sumN(20)), cls(sumN(20))), kv('近 60 日', yiTxt(sumN(60)), cls(sumN(60)))));
+  };
+  const instCard = card('三大法人買賣超', '每日金額（億）；淡色＝估算', h('div', { class: 'row', style: { marginBottom: '.5rem' } },
+    seg([['all', BASIS[S.basis].short], ['fi', '外資'], ['it', '投信'], ['ds', '自營商']], App.mkInst, v => { App.mkInst = v; render(); }),
+    seg([['60', '60 天'], ['120', '半年'], ['250', '1 年']], String(App.mkN), v => { App.mkN = +v; render(); })), instEl, instKv);
+  // 融資
+  const mgEl = h('div', { class: 'chart' });
+  const mgIdx = D.d.map((_, k) => k).filter(k => A.mamt[k] != null);
+  const drawMg = () => { const ds = mgIdx.map(k => D.d[k]);
+    drawLines(mgEl, { dates: ds, series: [{ name: '融資餘額', color: 'var(--l2)', vals: mgIdx.map(k => A.mamt[k]) }], fmtV: v => fmt.int(v) + ' 億', axisFmt: v => fmt.int(v), label: '融資餘額',
+      tipExtra: q => { const k = mgIdx[q], p = mgIdx[q - 1]; return [p != null ? tipRow('增減', (A.mamt[k] - A.mamt[p] > 0 ? '+' : '') + (A.mamt[k] - A.mamt[p]).toFixed(1) + ' 億', cls(A.mamt[k] - A.mamt[p])) : null, tipRow('張數', fmt.int(A.mbal[k]) + ' 張')]; } }); };
+  const mgCard = card('融資餘額（大盤）', mk === 'twse' ? '上市信用交易統計；金額單位億元' : '上櫃融資融券餘額合計；金額單位億元', mgEl,
+    h('div', { class: 'tiny muted', style: { marginTop: '.3rem' } }, '融資只保留最近約 60 個交易日以上（從開始抓的那天起累積）。'));
+  // 漲跌家數
+  const udEl = h('div', { class: 'chart' });
+  const drawUd = () => { const k0 = Math.max(0, D.d.length - 60); const ks = []; for (let k = k0; k < D.d.length; k++) if (A.ud[k]) ks.push(k);
+    drawDivBars(udEl, { dates: ks.map(k => D.d[k]), vals: ks.map(k => A.ud[k][0]), down: ks.map(k => A.ud[k][1]), axisFmt: v => fmt.int(v), label: '漲跌家數',
+      tip: q => { const u = A.ud[ks[q]]; return [tipRow('上漲', `${u[0]}（漲停 ${u[3] || 0}）`, 'up'), tipRow('下跌', `${u[1]}（跌停 ${u[4] || 0}）`, 'down'), tipRow('平盤', String(u[2] ?? '—'))]; } }); };
+  const udCard = card('漲跌家數', '上方＝上漲家數、下方＝下跌家數（近 60 個交易日）', udEl);
+  main.append(head, h('div', { class: 'grid g-main', style: { marginTop: '1rem' } },
+    h('div', { class: 'grid' }, card('K 線', '日／週／月 K；成交金額（億）', kl), instCard),
+    h('div', { class: 'grid' }, mgCard, udCard)));
+  drawHead(); drawInst(); drawMg(); drawUd();
+  App.redrawMarket = () => { kl.redraw(); drawInst(); drawMg(); drawUd(); drawHead(); };
+  App.liveMarket = () => { if (idxLive(mk)) { drawHead(); kl.redraw && kl.redraw(); } };
+}
+
+/* ---------- 台指期 ---------- */
+function txBars() {
+  const T = MKT.data.tx, F = MKT.data.finst, fpos = new Map(F.d.map((d, k) => [d, k])), night = App.mkK.night;
+  return T.d.map((d, k) => { const nn = T.n[k]; let o = T.o[k], hh = T.h[k], l = T.l[k], vol = T.vol[k];
+    if (night && nn) { o = nn[0]; hh = Math.max(hh, nn[1]); l = Math.min(l, nn[2]); vol = (vol || 0) + (nn[4] || 0); }
+    const f = fpos.has(d) ? F.fi[fpos.get(d)] : null;
+    return { d, o, h: hh, l, c: T.c[k], vol, inst: f ? f[1] : null, instLevel: true, x: { m: T.m[k], settle: T.settle[k], oi: T.oi[k], n: nn } }; });
+}
+function viewTx(main) {
+  const M2 = MKT.data, T = M2.tx, F = M2.finst, L = M2.large, I = M2.idx.twse;
+  if (!T.d.length) { main.append(card('台指期', null, h('p', { class: 'small muted' }, '還沒有台指期資料：下次 run.bat 執行時會從期交所補抓最近約 2 年（第一次約多 15 分鐘）。'))); return; }
+  const k = T.d.length - 1, same = k > 0 && T.m[k - 1] === T.m[k], chg = same ? T.c[k] - T.c[k - 1] : null;
+  const ip = I.d.lastIndexOf(T.d[k]), basis = ip >= 0 ? T.c[k] - I.c[ip] : null;
+  const fk = F.d.lastIndexOf(T.d[k]), fprev = fk > 0 ? fk - 1 : -1;
+  const net = (arr, q) => q >= 0 && arr[q] ? arr[q][1] : null;
+  const ym = m => `${m.slice(0, 4)}/${m.slice(4)}`;
+  const head = card(`台指期 ${ym(T.m[k])}`, `${fmt.fdate(T.d[k])}・一般交易時段（近月連續）`,
+    h('div', { class: 'row', style: { alignItems: 'baseline', gap: '.8rem' } },
+      h('span', { class: 'num ' + cls(chg), style: { fontSize: '1.8rem', fontWeight: 700 } }, fmt.int(T.c[k])),
+      h('span', { class: 'num ' + cls(chg), style: { fontWeight: 600 } }, chg == null ? '換月' : `${chg > 0 ? '▲' : chg < 0 ? '▼' : ''}${fmt.int(Math.abs(chg))}（${fmt.pct(chg / T.c[k - 1] * 100)}）`)),
+    h('div', { class: 'kv', style: { marginTop: '.7rem' } },
+      kv('成交量', fmt.int(T.vol[k]) + ' 口'), kv('未平倉', fmt.int(T.oi[k]) + ' 口', null, same && T.oi[k - 1] != null ? h('span', { class: cls(T.oi[k] - T.oi[k - 1]) }, fmt.sint(T.oi[k] - T.oi[k - 1])) : null), kv('結算價', fmt.int(T.settle[k])),
+      kv('期現價差', basis != null ? fmt.sint(basis) + ' 點' : '—', cls(basis), basis != null ? (basis >= 0 ? '正價差（期貨高於加權）' : '逆價差（期貨低於加權）') : null),
+      kv('外資淨未平倉', kouTxt(net(F.fi, fk)), cls(net(F.fi, fk)), net(F.fi, fprev) != null && net(F.fi, fk) != null ? '比前一天 ' + fmt.sint(net(F.fi, fk) - net(F.fi, fprev)) + ' 口' : null),
+      kv('投信淨未平倉', kouTxt(net(F.it, fk)), cls(net(F.it, fk))), kv('自營淨未平倉', kouTxt(net(F.dl, fk)), cls(net(F.dl, fk))),
+      T.n[k] ? kv('夜盤（前一晚）', fmt.int(T.n[k][3]), null, `高 ${fmt.int(T.n[k][1])}・低 ${fmt.int(T.n[k][2])}・${fmt.int(T.n[k][4])} 口`) : null));
+  const kl = mkKlineCard(txBars, { label: '台指期', volUnit: '口', volName: '成交量', volFmt: v => fmt.int(v) + ' 口', instLabel: '外資淨未平倉（口）', instName: '外資淨未平倉', instFmt: kouTxt, instToggle: '外資未平倉',
+    tools: redo => [h('label', { class: 'chk small' }, h('input', { type: 'checkbox', checked: App.mkK.night, onchange: e => { App.mkK.night = e.target.checked; redo(); } }), '含夜盤')],
+    tipExtra: b => [b.x && b.x.m ? tipRow('契約', ym(b.x.m)) : null, b.x && b.x.settle ? tipRow('結算價', fmt.int(b.x.settle)) : null, b.x && b.x.oi ? tipRow('未平倉', fmt.int(b.x.oi) + ' 口') : null],
+    note: '近月連續：每天取最近到期的月契約，換月那天價格會跳動。勾「含夜盤」＝前一晚夜盤＋當天日盤合成一根。' });
+  // 三大法人未平倉
+  const fEl = h('div', { class: 'chart' }); App.mkFN = App.mkFN || 120; App.mkFU = App.mkFU || 'kou';
+  const fSeries = () => { const k0 = Math.max(0, F.d.length - App.mkFN), q = App.mkFU === 'kou' ? 1 : 2; const pick = arr => F.d.slice(k0).map((_, z) => arr[k0 + z] ? arr[k0 + z][q] : null);
+    return { dates: F.d.slice(k0), series: [{ name: '外資', color: 'var(--l1)', vals: pick(F.fi) }, { name: '投信', color: 'var(--l2)', vals: pick(F.it) }, { name: '自營商', color: 'var(--l3)', vals: pick(F.dl) }] }; };
+  const drawF = () => { const sr = fSeries(); drawLines(fEl, { ...sr, zero: true, fmtV: App.mkFU === 'kou' ? kouTxt : v => fmt.yi(v, 1) + ' 億', label: '期貨法人未平倉', cls: true }); };
+  const fCard = card('三大法人未平倉（臺股期貨）', '多空未平倉淨額：正＝淨多單、負＝淨空單', h('div', { class: 'row', style: { marginBottom: '.5rem' } },
+    seg([['kou', '口數'], ['amt', '金額（億）']], App.mkFU, v => { App.mkFU = v; render(); }), seg([['60', '60 天'], ['120', '半年'], ['250', '1 年'], ['500', '2 年']], String(App.mkFN), v => { App.mkFN = +v; render(); })),
+    fEl, lineLegend(fSeries().series));
+  // 大額交易人
+  const lEl = h('div', { class: 'chart' }); App.mkLW = App.mkLW || '1';
+  const lSeries = () => { const k0 = Math.max(0, L.d.length - App.mkFN), key = 'all' + App.mkLW;
+    const v5 = L[key].slice(k0).map(x => x ? x[0] - x[1] : null), v10 = L[key].slice(k0).map(x => x ? x[2] - x[3] : null);
+    return { dates: L.d.slice(k0), k0, key, series: [{ name: '前五大', color: 'var(--l1)', vals: v5 }, { name: '前十大', color: 'var(--l2)', vals: v10, dash: '5 3' }] }; };
+  const drawL = () => { const sr = lSeries(); drawLines(lEl, { dates: sr.dates, series: sr.series, zero: true, fmtV: kouTxt, label: '大額交易人淨部位',
+    tipExtra: q => { const x = L[sr.key][sr.k0 + q]; return x ? [tipRow('前五大 買／賣', `${fmt.int(x[0])}／${fmt.int(x[1])}`), tipRow('前十大 買／賣', `${fmt.int(x[2])}／${fmt.int(x[3])}`), tipRow('全市場未平倉', fmt.int(x[4]) + ' 口')] : []; } }); };
+  const lk = L.d.length - 1, lx = lk >= 0 ? L['all' + App.mkLW][lk] : null;
+  const lCard = card('大額交易人（臺股期貨，所有月份）', 'TX＋MTX/4＋TMF/20；淨部位＝買方未平倉 − 賣方未平倉', h('div', { class: 'row', style: { marginBottom: '.5rem' } },
+    seg([['1', '特定法人'], ['0', '全部交易人']], App.mkLW, v => { App.mkLW = v; render(); })), lEl, lineLegend(lSeries().series),
+    lx ? h('div', { class: 'kv', style: { marginTop: '.5rem' } }, kv('前五大淨部位', kouTxt(lx[0] - lx[1]), cls(lx[0] - lx[1]), `佔全市場 ${((lx[0] - lx[1]) / lx[4] * 100).toFixed(1)}%`), kv('前十大淨部位', kouTxt(lx[2] - lx[3]), cls(lx[2] - lx[3]), `佔全市場 ${((lx[2] - lx[3]) / lx[4] * 100).toFixed(1)}%`), kv('全市場未平倉', fmt.int(lx[4]) + ' 口', null, fmt.date(L.d[lk]))) : null);
+  main.append(head, h('div', { class: 'grid g-main', style: { marginTop: '1rem' } }, h('div', { class: 'grid' }, card('K 線', '台指期近月；成交量（口）', kl), fCard), h('div', { class: 'grid' }, lCard)));
+  drawF(); drawL();
+  App.redrawMarket = () => { kl.redraw(); drawF(); drawL(); };
+  App.liveMarket = null;
 }
 
 /* ================= 籌碼分布：外資持股、融資、投信／自營累計、集保股權分散 ================= */

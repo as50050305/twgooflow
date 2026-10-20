@@ -202,6 +202,7 @@ class Live:
         self.date = None
         self.cycle_sec = None
         self.last_saved = 0.0
+        self.ibar = {}          # 指數代號 → 今日每分鐘指數（271 格）
         self.mbar = {}          # code → 今日 1 分鐘資料：每分鐘 6 格（收、高、低、累計量張、累計成交額億、累計外盤額億），共 271 分鐘
         self.th = {"minVal5": 0.5, "ratio5": 3.0, "estVR": 1.5, "outer5": 0.6, "near": 0.99}
         th = F.load_json(os.path.join(F.DATA_DIR, "live_settings.json"), {})
@@ -250,8 +251,15 @@ class Live:
                     z = num(m.get("z")) or num(m.get("pz"))
                     y = num(m.get("y"))
                     old = self.idx.get(c, {})
-                    self.idx[c] = {"z": z or old.get("z"), "y": y, "t": m.get("t"), "d": m.get("d"), "h": num(m.get("h")), "l": num(m.get("l"))}
+                    self.idx[c] = {"z": z or old.get("z"), "y": y, "t": m.get("t"), "d": m.get("d"), "h": num(m.get("h")), "l": num(m.get("l")),
+                                   "o": num(m.get("o")) or old.get("o")}
                     self.date = m.get("d") or self.date
+                    # 大盤分時：每分鐘最後一個指數值（09:00～13:30，271 格）
+                    zz = self.idx[c]["z"]
+                    if zz:
+                        k = int(self.minutes_of(data_time(m, now)))
+                        if 0 <= k <= 270:
+                            self.ibar.setdefault(c, [None] * 271)[k] = round(zz, 2)
                     continue
                 if c not in self.ref:
                     continue
@@ -426,7 +434,7 @@ class Live:
                     "status": status_now(self.cfg), "index": self.idx, "th": self.th, "requests": MIS.count if MIS else 0,
                     "cycleSec": self.cycle_sec, "lagSec": self.lag(),
                     "fields": ["z", "y", "o", "h", "l", "v", "val", "val5", "ratio5", "est", "out5", "h20", "flags", "u", "w", "t"],
-                    "stocks": stocks, "events": self.events}
+                    "stocks": stocks, "events": self.events, "ibars": {k: list(v) for k, v in self.ibar.items()}}
 
 
 def status_now(cfg):
@@ -440,7 +448,7 @@ def status_now(cfg):
 
 # ----------------------------------------------------------------- 輪詢
 MIS = None
-LIVE_VERSION = 4          # 盤中服務版本：新版啟動時若發現舊版（2 以上）在跑，會請它結束後接手（v3：直接開 dashboard.html 也能連、收盤報價存檔；v4：早上補抓到新資料會自動換參考資料）
+LIVE_VERSION = 5          # 盤中服務版本：新版啟動時若發現舊版（2 以上）在跑，會請它結束後接手（v3：直接開 dashboard.html 也能連、收盤報價存檔；v4：早上補抓到新資料會自動換參考資料；v5：大盤開盤價與分時）
 QUIT = threading.Event()  # 收到「交棒」要求時結束整個服務
 
 
