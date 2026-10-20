@@ -99,6 +99,7 @@ main{ max-width:1400px; margin:0 auto; padding:1rem; padding-bottom:5rem }
 .tile .val{ font-size:1.45rem; font-weight:650; line-height:1.25; margin-top:.15rem; white-space:nowrap }
 .tile .dl{ font-size:.85rem }
 .tile.link{ cursor:pointer; transition:border-color .15s }
+.sumpts{ margin:.2rem 0 .4rem; padding-left:1.2rem; display:grid; gap:.45rem; line-height:1.6 }
 .tile.link:hover, .tile.link:focus-visible{ border-color:var(--accent); outline:none }
 .tile.link .go{ font-size:.75rem; color:var(--accent-ink); margin-top:.3rem }
 .mkt-chip .lk{ cursor:pointer; border-radius:6px; padding:.1rem .3rem; margin:-.1rem -.3rem }
@@ -1517,7 +1518,7 @@ function buildShell() {
         h('button', { class: 'iconbtn', title: '設定', 'aria-label': '設定', onclick: openSettings }, icon('gear')),
       ),
       h('nav', { class: 'tabs', id: 'tabs' },
-        [['overview', '總覽'], ['market', '大盤'], ['live', '盤中'], ['mom', '動能'], ['rank', '排行'], ['flows', '法人動向'], ['watch', '自選'], ['help', '說明']].map(([k, l]) => h('a', { href: '#' + k, 'data-k': k }, l)))),
+        [['overview', '總覽'], ['summary', '每日總結'], ['market', '大盤'], ['live', '盤中'], ['mom', '動能'], ['rank', '排行'], ['flows', '法人動向'], ['watch', '自選'], ['help', '說明']].map(([k, l]) => h('a', { href: '#' + k, 'data-k': k }, l)))),
     h('main', { id: 'main' }),
     h('div', { id: 'overlay' }));
   $('#dateSel').value = App.t; $('#basisSel').value = S.basis;
@@ -1559,7 +1560,7 @@ function render() {
   parseRoute(); if (typeof momSync === 'function') momSync(); updateChips(); updateBell();
   $$('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.k === App.route || (App.route === 'stock' && a.dataset.k === 'watch' && false)));
   const main = $('#main'); main.replaceChildren();
-  const fn = { overview: viewOverview, market: viewMarket, live: viewLive, mom: viewMom, rank: viewRank, flows: viewFlows, watch: viewWatch, stock: viewStock, help: viewHelp }[App.route] || viewOverview;
+  const fn = { overview: viewOverview, summary: viewSummary, market: viewMarket, live: viewLive, mom: viewMom, rank: viewRank, flows: viewFlows, watch: viewWatch, stock: viewStock, help: viewHelp }[App.route] || viewOverview;
   fn(main);
   if (App.route !== 'stock') window.scrollTo(0, 0);
 }
@@ -3193,6 +3194,133 @@ function revChartDraw(el, rows, W) {
   svg.appendChild(s('text', { x: W - pad.r + 4, y: Y(yhi) + 10 }, Math.round(yhi) + '%')); svg.appendChild(s('text', { x: W - pad.r + 4, y: Y(0) + 4 }, '0%'));
   el.appendChild(svg);
   el.appendChild(h('div', { class: 'legend' }, h('span', null, h('i', { class: 'box', style: { background: 'var(--up)', opacity: .45 } }), '營收（年增為正）'), h('span', null, h('i', { class: 'box', style: { background: 'var(--down)', opacity: .45 } }), '營收（年增為負）'), h('span', null, h('i', { style: { background: 'var(--accent)' } }), '年增率')));
+}
+
+/* ================= 每日總結：主力（法人＋大戶＋融資）往哪裡流 ================= */
+App.sumSide = App.sumSide || 'buy';
+App.sumN = App.sumN || 5;
+// 集保千張大戶：資料日 ≤ 交易日的最近一週，與前一週比（百分點）
+function bigWeek(t) {
+  const C = CHIPS.data; if (!C || !C.w.length) return null;
+  const d = M.dates[t]; let k = C.w.length - 1; while (k >= 0 && C.w[k] > d) k--;
+  return k >= 0 ? k : null;
+}
+function bigChg(i, wk) {
+  const C = CHIPS.data; if (wk == null || wk < 1) return null;
+  const r = C.d[M.codes[i]]; if (!r || !r[wk] || !r[wk - 1]) return null;
+  return r[wk][3] - r[wk - 1][3];
+}
+// 融資 n 日增減（%）：當天還沒公布就往前找
+function marginChg(t, i, n) {
+  const t1 = marginDay(t, i), t0 = Math.max(0, t1 - n); const b1 = M.days[t1].mbal[i], b0 = M.days[t0].mbal[i];
+  return b1 != null && b0 > 0 ? (b1 - b0) / b0 * 100 : null;
+}
+function sumStockRows(t, n, wk) {
+  const rows = [];
+  for (let i = 0; i < M.N; i++) {
+    if (!hasTrade(t, i)) continue;
+    const net = rsum(M.net, t, n, i), val = rsum(M.valY, t, n, i);
+    if (!val) continue;
+    const bc = bigChg(i, wk), mg = marginChg(t, i, n);
+    const r = { i, code: M.codes[i], name: M.names[i], n1: M.net[t][i], nN: net, n20: rsum(M.net, t, 20, i), fi: rsum(M.fi, t, n, i), it: rsum(M.it, t, n, i),
+      share: net / val * 100, bc, mg, ret: stockRetN(t, i, n) * 100, sec: M.memberOf[i].filter(id => visibleSector(M.sectors[id])).map(id => M.sectors[id].name) };
+    r.flags = { inst: net > 0, big: bc != null && bc > 0, mgDown: mg != null && mg < 0 };
+    r.flagsSell = { inst: net < 0, big: bc != null && bc < 0, mgUp: mg != null && mg > 0 };
+    r.conc = r.flags.inst && r.flags.big && r.flags.mgDown;          // 籌碼集中：法人買＋大戶增＋融資減
+    r.disp = r.flagsSell.inst && r.flagsSell.big && r.flagsSell.mgUp; // 籌碼渙散：法人賣＋大戶減＋融資增
+    rows.push(r);
+  }
+  return rows;
+}
+function sumSectorRows(t, n, wk) {
+  const st = sectorStats(t);
+  return st.filter(x => visibleSector(M.sectors[x.id])).map(x => {
+    const sc = M.sectors[x.id];
+    let streak = 0; const sg = Math.sign(M.secFlow[t][x.id]); for (let k = t; k >= 0 && sg && Math.sign(M.secFlow[k][x.id]) === sg; k--) streak++;
+    let fN = 0; for (let k = Math.max(0, t - n + 1); k <= t; k++) fN += M.secFlow[k][x.id];
+    let w = 0, wb = 0, m1 = 0, m0 = 0;
+    for (const i of sc.m) { const bc = bigChg(i, wk); const vv = rsum(M.valY, t, 20, i); if (bc != null && vv > 0) { w += vv; wb += vv * bc; }
+      const t1 = marginDay(t, i), t0 = Math.max(0, t1 - n); const b1 = M.days[t1].mbal[i], b0 = M.days[t0].mbal[i]; if (b1 != null && b0 != null) { m1 += b1 * (M.days[t1].c[i] || 0); m0 += b0 * (M.days[t0].c[i] || M.days[t1].c[i] || 0); } }
+    const prior = x.f20 - x.f5;
+    const status = x.f5 > 0 && prior < 0 ? '由賣轉買' : x.f5 < 0 && prior > 0 ? '由買轉賣' : QUAD[quadrant(x)].name;
+    return { ...x, fN, streak: streak * sg, big: w ? wb / w : null, mg: m0 > 0 ? (m1 - m0) / m0 * 100 : null, status };
+  });
+}
+const statusTag = s => h('span', { class: 'tag ' + (s === '加速流入' || s === '由賣轉買' ? 'up' : s === '加速流出' || s === '由買轉賣' ? 'down' : '') }, s);
+const ppCell = v => h('td', { class: 'r num ' + cls(v) }, v == null ? '—' : (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(2));
+const mgCell = v => h('td', { class: 'r num ' + cls(v == null ? 0 : -v) }, v == null ? '—' : fmt.pct(v, 1));   // 融資減少用上漲色（籌碼變乾淨）
+
+function viewSummary(main) {
+  const t = App.t, n = App.sumN;
+  if (!CHIPS.data && CHIPS.status !== 'error') { loadChips().then(() => { if (App.route === 'summary') render(); }, () => { if (App.route === 'summary') render(); }); }
+  const wk = bigWeek(t), C = CHIPS.data;
+  const secs = sumSectorRows(t, n, wk), stocks = sumStockRows(t, n, wk);
+  const on = officialNet(t), op = officialParts(t);
+  const yiS = v => fmt.yiu(v, 1);
+  const top = (arr, key, k, dir = -1) => arr.filter(x => x[key] != null && (dir < 0 ? x[key] > 0 : x[key] < 0)).sort((a, b) => dir * (a[key] - b[key])).slice(0, k);
+  const names = (arr, key) => arr.map(x => `${x.name}（${yiS(x[key])}）`).join('、');
+  // 重點
+  const inflow = top(secs, 'f5', 3), outflow = top(secs, 'f5', 3, 1);
+  const accel = inflow.filter(x => x.status === '加速流入').map(x => x.name);
+  const turn = secs.filter(x => x.status === '由賣轉買').sort((a, b) => b.f5 - a.f5).slice(0, 3);
+  const conc = stocks.filter(r => r.conc).sort((a, b) => b.nN - a.nN).slice(0, 5);
+  const fiTop = top(stocks, 'fi', 3), itTop = top(stocks, 'it', 3);
+  const bigSec = C ? secs.filter(x => x.big != null && x.n >= 3).sort((a, b) => b.big - a.big).slice(0, 3) : [];
+  const nTxt = n === 1 ? '當日' : `近 ${n} 日`;
+  const pts = [
+    on != null ? h('li', null, `${fmt.fdate(M.dates[t])} 三大法人合計 `, h('b', { class: cls(op.fi + op.it + op.dsf + op.dsh) }, yiS(op.fi + op.it + op.dsf + op.dsh)), `（外資 ${yiS(op.fi)}、投信 ${yiS(op.it)}、自營 ${yiS(op.dsf + op.dsh)}）。`) : null,
+    inflow.length ? h('li', null, `${nTxt}資金最集中流入：`, h('b', null, names(inflow, 'fN')), accel.length ? `；其中 ${accel.join('、')} 是加速流入。` : '。') : null,
+    turn.length ? h('li', null, '由賣轉買（前 15 天淨流出、近 5 天轉為淨流入）：', h('b', null, turn.map(x => x.name).join('、')), '。') : null,
+    outflow.length ? h('li', null, `${nTxt}流出最多：`, h('b', null, names(outflow, 'fN')), '。') : null,
+    conc.length ? h('li', null, '主力籌碼集中（法人買＋千張大戶增＋融資減）：', h('b', null, conc.map(r => r.name).join('、')), '。') : null,
+    fiTop.length || itTop.length ? h('li', null, `${nTxt}外資買最多：${fiTop.map(r => r.name).join('、') || '—'}；投信買最多：${itTop.map(r => r.name).join('、') || '—'}。`) : null,
+    bigSec.length ? h('li', null, `千張大戶比率增加最多的板塊（集保 ${fmt.fdate(C.w[wk])} 對比前一週）：${bigSec.map(x => `${x.name}（${x.big > 0 ? '+' : ''}${x.big.toFixed(2)} 個百分點）`).join('、')}。`) : null,
+  ];
+  main.append(h('div', { class: 'row', style: { marginBottom: '.8rem', alignItems: 'center' } },
+    seg([['1', '當日'], ['5', '近 5 日'], ['20', '近 20 日']], String(n), v => { App.sumN = +v; render(); }),
+    h('span', { class: 'small muted' }, `資料日 ${fmt.fdate(M.dates[t])}（右上角可換日期）・法人口徑：${BASIS[M.basis].short}`)));
+  main.append(card('今日重點', '依法人買賣超、千張大戶、融資自動整理', h('ul', { class: 'sumpts' }, pts),
+    !C ? h('div', { class: 'tiny muted' }, CHIPS.status === 'error' ? '集保資料還沒有：' + CHIPS.err.message : '集保資料載入中…') : wk == null || wk < 1 ? h('div', { class: 'tiny muted' }, '千張大戶要有兩週以上的集保資料才能比較。') : null));
+  // 板塊表
+  const secBox = h('div');
+  const drawSec = () => secBox.replaceChildren(sortTable('sum_sec', [
+    { k: 'name', label: '板塊', v: r => r.name, cell: r => h('td', null, r.name, ' ', sectorTypeTag(r.type)) },
+    { k: 'f1', label: '當日（億）', r: 1, v: r => r.f1, cell: r => numCell(r.f1) },
+    { k: 'f5', label: '近 5 日', r: 1, v: r => r.f5, cell: r => numCell(r.f5) },
+    { k: 'f20', label: '近 20 日', r: 1, v: r => r.f20, cell: r => numCell(r.f20) },
+    { k: 'y', label: '加速（億／天）', r: 1, v: r => r.y, cell: r => numCell(r.y, v => fmt.yi(v, 2)) },
+    { k: 'streak', label: '連續', r: 1, v: r => r.streak, cell: r => h('td', { class: 'r num ' + cls(r.streak) }, r.streak ? `${r.streak > 0 ? '流入' : '流出'} ${Math.abs(r.streak)} 天` : '—') },
+    { k: 'r5', label: '5 日漲跌', r: 1, v: r => r.r5, cell: r => pctCell(r.r5) },
+    { k: 'big', label: '千張大戶週變化', r: 1, v: r => r.big, cell: r => ppCell(r.big) },
+    { k: 'mg', label: `融資${n === 1 ? '當日' : n + ' 日'}`, r: 1, v: r => r.mg, cell: r => mgCell(r.mg) },
+    { k: 'status', label: '狀態', v: r => r.status, cell: r => h('td', null, statusTag(r.status)) },
+  ], secs, { k: n === 1 ? 'f1' : n === 20 ? 'f20' : 'f5', dir: 'desc' }, { redraw: drawSec, limit: 30, onRow: r => { App.selSector = r.id; location.hash = '#overview'; }, empty: '沒有板塊資料' }));
+  drawSec();
+  main.append(h('div', { style: { marginTop: '1rem' } }, card('板塊資金流向', '點一列看板塊詳情；加速＝近 5 日日均 − 近 20 日日均；千張大戶週變化＝成分股以成交值加權（百分點）', secBox,
+    h('div', { class: 'tiny muted', style: { marginTop: '.3rem' } }, '狀態：「由賣轉買」＝前 15 天淨流出、近 5 天淨流入；其餘依泡泡圖四象限（加速流入、流入但放緩、流出但放緩、加速流出）。一檔股票屬於多個板塊時，每個板塊都會計入。'))));
+  // 個股表
+  const stBox = h('div');
+  const side = App.sumSide;
+  const pick = stocks.filter(r => side === 'buy' ? r.nN > 0 : r.nN < 0);
+  const drawSt = () => stBox.replaceChildren(sortTable('sum_stk_' + side, [
+    { k: 'name', label: '股票', v: r => r.code, cell: r => h('td', null, stockCell(r.i), (side === 'buy' ? r.conc : r.disp) ? h('span', { class: 'tag ' + (side === 'buy' ? 'up' : 'down'), style: { marginLeft: '.3rem' } }, side === 'buy' ? '籌碼集中' : '籌碼渙散') : null) },
+    { k: 'sec', label: '板塊', v: r => r.sec[0] || '', cell: r => h('td', { class: 'small ink2' }, r.sec.slice(0, 2).join('、') || '—') },
+    { k: 'nN', label: `${BASIS[M.basis].short}${n === 1 ? '當日' : n + ' 日'}（億）`, r: 1, v: r => r.nN, cell: r => numCell(r.nN) },
+    { k: 'share', label: '佔成交值', r: 1, v: r => r.share, cell: r => pctCell(r.share) },
+    { k: 'fi', label: '外資', r: 1, v: r => r.fi, cell: r => numCell(r.fi) },
+    { k: 'it', label: '投信', r: 1, v: r => r.it, cell: r => numCell(r.it) },
+    { k: 'n20', label: '20 日（億）', r: 1, v: r => r.n20, cell: r => numCell(r.n20) },
+    { k: 'bc', label: '千張大戶週變化', r: 1, v: r => r.bc, cell: r => ppCell(r.bc) },
+    { k: 'mg', label: `融資${n === 1 ? '當日' : n + ' 日'}`, r: 1, v: r => r.mg, cell: r => mgCell(r.mg) },
+    { k: 'ret', label: `${n === 1 ? '當日' : n + ' 日'}漲跌`, r: 1, v: r => r.ret, cell: r => pctCell(r.ret) },
+    { k: 'add', label: '', v: r => 0, cell: r => h('td', null, addWatchBtn(r.code)) },
+  ], pick, { k: 'nN', dir: side === 'buy' ? 'desc' : 'asc' }, { redraw: drawSt, limit: 50, pre: r => (side === 'buy' ? r.conc : r.disp) ? 0 : App.sumOnly ? 9 : 1, onRow: r => goStock(r.code) }));
+  drawSt();
+  main.append(h('div', { style: { marginTop: '1rem' } }, card('主力動向個股', '法人買賣超 × 千張大戶 × 融資', h('div', { class: 'row', style: { marginBottom: '.5rem', alignItems: 'center' } },
+      seg([['buy', '主力買進'], ['sell', '主力賣出']], side, v => { App.sumSide = v; render(); }),
+      h('span', { class: 'small muted' }, side === 'buy' ? '「籌碼集中」＝法人買超＋千張大戶增加＋融資減少，排在最前面' : '「籌碼渙散」＝法人賣超＋千張大戶減少＋融資增加，排在最前面')),
+    stBox,
+    h('div', { class: 'tiny muted', style: { marginTop: '.3rem' } }, '佔成交值＝期間法人買賣超金額 ÷ 期間成交金額。千張大戶是集保每週資料（週五公布），與期間不一定對齊。融資顏色：減少用紅（籌碼變乾淨）、增加用綠。主力分點（券商進出）資料要驗證碼，沒有列入。'))));
 }
 
 /* ================= 大盤（加權、櫃買）與台指期 ================= */
