@@ -203,6 +203,7 @@ class Live:
         self.cycle_sec = None
         self.last_saved = 0.0
         self.ibar = {}          # 指數代號 → 今日每分鐘指數（271 格）
+        self.radar = []         # 買進雷達：盤中條件觸發的訊號（每種條件每檔有冷卻時間）
         self.mbar = {}          # code → 今日 1 分鐘資料：每分鐘 6 格（收、高、低、累計量張、累計成交額億、累計外盤額億），共 271 分鐘
         self.th = {"minVal5": 0.5, "ratio5": 3.0, "estVR": 1.5, "outer5": 0.6, "near": 0.99}
         th = F.load_json(os.path.join(F.DATA_DIR, "live_settings.json"), {})
@@ -304,6 +305,11 @@ class Live:
                         s["inner"] += amt / 2
                 elif prev_v is None:
                     s["val0"] = v * (px or 0) / 1e5             # 第一次看到：之前已成交的量（估）不算進 5 分鐘視窗
+                    s["v0"] = v                                 # 均價線只用服務啟動後的成交（開盤前就啟動＝全天均價）
+                fv = sum(num(x) or 0 for x in (m.get("f") or "").split("_") if x)    # 五檔委賣量（張）
+                gv = sum(num(x) or 0 for x in (m.get("g") or "").split("_") if x)    # 五檔委買量（張）
+                if fv or gv:
+                    s["askv"], s["bidv"] = fv, gv
                 s.update({"z": px, "v": v, "px_est": cur_est or prev_px, "a1": a1 or s.get("a1"), "b1": b1 or s.get("b1"), "y": num(m.get("y")),
                           "o": num(m.get("o")), "h": num(m.get("h")), "l": num(m.get("l")), "u": num(m.get("u")), "w": num(m.get("w")),
                           "t": m.get("t"), "trial": trial, "ts": max(ts, s.get("ts", 0))})
@@ -312,6 +318,10 @@ class Live:
                 if not sm or ts > sm[-1][0] or v != sm[-1][3]:
                     sm.append((max(ts, sm[-1][0] if sm else 0), s["val"], s["outer"], v))
                 self.evaluate(c, s, self.minutes_of(s["ts"]))
+                try:
+                    self.radar_check(c, s, self.minutes_of(s["ts"]))
+                except Exception as e:   # 雷達出錯不能影響報價
+                    log(f"  ! 買進雷達 {c} 計算失敗：{e}")
             self.updated = now.strftime("%H:%M:%S")
 
     MB_W, MB_N = 6, 271     # 09:00～13:30
@@ -349,7 +359,98 @@ class Live:
             r = self.ref.get(c) or {}
             return {"code": c, "date": self.date, "updated": self.updated, "status": status_now(self.cfg), "y": s.get("y"), "h20": r.get("h20"),
                     "val": round(s.get("val", 0.0), 3), "outer": round(s.get("outer", 0.0), 3), "inner": round(s.get("inner", 0.0), 3),
+                    "vwap": None if s.get("vwap") is None else round(s["vwap"], 2), "obi": None if s.get("obi") is None else round(s["obi"], 2),
+                    "bidv": s.get("bidv"), "askv": s.get("askv"), "out5": None if s.get("out5") is None else round(s["out5"], 2), "est": None if s.get("est") is None else round(s["est"], 2),
+                    "radar": [e for e in self.radar if e["code"] == c], "radarNames": self.RADAR_NAMES,
                     "fields": ["m", "c", "h", "l", "vCum", "valCum", "outerCum"], "bars": bars}
+
+    RADAR_NAMES = {"brk15": "爆量突破", "h20": "突破前20日高", "surge": "急拉", "vwap": "站上均價", "obi": "委買強",
+                   "lu": "觸及漲停", "lur": "漲停再鎖", "luo": "漲停打開", "vol": "爆量"}
+
+    def radar_check(self, c, s, mins):
+        """買進雷達：盤中條件觸發就記一筆（同一檔同一種條件有冷卻時間，避免洗版）。
+        分數只算盤中的部分（-10～60）；法人、動能、板塊、均線等加分在網頁上用盤後資料算。"""
+        r = self.ref[c]
+        z, y = s.get("z"), s.get("y")
+        if s.get("trial") or not z or not y or mins < 1 or mins > 271 or (r.get("val20") or 0) < 0.3:
+            return
+        k = min(270, int(mins))
+        chg = (z / y - 1) * 100
+        rd = s.setdefault("rd", {})
+
+        def fire(typ, txt, score, gap=None, lv=None):
+            last = rd.get(typ)
+            if last is not None and (gap is None or k - last < gap):
+                return
+            rd[typ] = k
+            if len(self.radar) >= 6000:
+                return
+            self.radar.append({"id": len(self.radar) + 1, "time": s.get("t") or F.now_tw().strftime("%H:%M:%S"), "m": k, "code": c, "name": r["name"],
+                               "type": typ, "z": round(z, 2), "chg": round(chg, 2), "txt": txt, "s": round(score, 1),
+                               "lv": None if lv is None else round(lv, 2)})
+
+        # 均價線（服務啟動後的成交額 ÷ 成交量）與五檔委買委賣力道
+        vol_since = (s.get("v") or 0) - s.get("v0", s.get("v") or 0)
+        vwap = s["val"] * 1e5 / vol_since if vol_since > 0 and s.get("val", 0) > 0 else None
+        s["vwap"] = vwap
+        bv, av = s.get("bidv"), s.get("askv")
+        s["obi"] = (bv - av) / (bv + av) if bv is not None and av is not None and bv + av > 0 else None
+        a = self.mbar.get(c)
+        W = self.MB_W
+        if a is not None:
+            # 爆量突破：價格突破前 15 分鐘（不含最近 3 分鐘）的最高價，而且最近 3 分鐘的量是平常同時段的 3 倍以上
+            highs = [a[j * W + 1] for j in range(max(0, k - 18), max(0, k - 2)) if not math.isnan(a[j * W])]
+            if len(highs) >= 8:
+                hi15 = max(highs)
+                jb = next((j for j in range(k - 3, -1, -1) if not math.isnan(a[j * W])), None)
+                if jb is not None:
+                    v3 = (s.get("v") or 0) - a[jb * W + 3]
+                    exp3 = (r.get("vol5") or 0) * max(0.002, prog(k + 1) - prog(jb + 1))
+                    ratio = v3 / exp3 if exp3 > 0 else 0
+                    if z > hi15 * 1.001 and ratio >= 3 and v3 * z / 1e5 >= 0.2 and chg > 0:
+                        fire("brk15", f"突破前 15 分鐘高點 {hi15:g}，近 {k - jb} 分鐘量 {v3:,.0f} 張（平常同時段的 {ratio:.1f} 倍）",
+                             30 + min(15, ratio * 1.5) + (5 if (s.get("out5") or 0) >= 0.6 else 0), gap=15, lv=hi15)
+            # 急拉：5 分鐘內從低點拉上 2.5% 以上
+            lows = [a[j * W + 2] for j in range(max(0, k - 5), k + 1) if not math.isnan(a[j * W])]
+            if lows:
+                lo5 = min(lows)
+                if lo5 > 0 and z / lo5 - 1 >= 0.025 and chg > 0:
+                    fire("surge", f"5 分鐘內從 {lo5:g} 拉到 {z:g}（+{(z / lo5 - 1) * 100:.1f}%）", 20, gap=15)
+        # 突破前 20 日高（大筆資金突破＝量能也夠）
+        if s.get("brk"):
+            fire("h20", f"站上前 20 日高 {r.get('h20')}" + ("，5 分鐘量能與外盤都夠（大筆資金突破）" if s.get("big") else ""), 40 if s.get("big") else 25, lv=r.get("h20"))
+        # 站上均價：先在均價下方，再站回均價之上，而且最近 5 分鐘外盤偏多
+        if vwap and k >= 10 and vol_since >= 50:
+            if z < vwap * 0.997:
+                s["vw_below"] = True
+            elif s.get("vw_below") and z > vwap * 1.003 and (s.get("out5") or 0) >= 0.55:
+                s["vw_below"] = False
+                fire("vwap", f"從均價 {vwap:.2f} 下方站回，最近 5 分鐘外盤 {(s.get('out5') or 0) * 100:.0f}%", 15, gap=30, lv=vwap)
+        # 委買強：五檔委買明顯大於委賣
+        if s["obi"] is not None and bv + av >= 100 and s["obi"] >= 0.5 and chg >= 0:
+            fire("obi", f"五檔委買 {bv:,.0f} 張 vs 委賣 {av:,.0f} 張", 10, gap=30)
+        # 漲停：觸及、打開、再鎖（每次狀態改變都記）
+        u = s.get("u")
+        if u:
+            if z >= u - 1e-6 and not s.get("at_lu"):
+                s["at_lu"] = True
+                if s.get("lu_open"):
+                    fire("lur", f"漲停 {u:g} 再鎖", 10, gap=0, lv=u)
+                else:
+                    fire("lu", f"觸及漲停 {u:g}", 15, gap=0, lv=u)
+            elif s.get("at_lu") and z < u - 1e-6:
+                s["at_lu"] = False
+                s["lu_open"] = True
+                fire("luo", f"漲停 {u:g} 打開到 {z:g}（追高要小心）", -10, gap=0)
+        # 爆量：預估全日量是 5 日均量的 3 倍以上（每天一次）
+        est = s.get("est")
+        if est and est >= 3 and k >= 15 and (s.get("v") or 0) >= 500:
+            fire("vol", f"預估全日量是 5 日均量的 {est:.1f} 倍（已成交 {s.get('v'):,.0f} 張）", 15)
+
+    def radar_since(self, since=0):
+        with self.lock:
+            return {"date": self.date, "updated": self.updated, "status": status_now(self.cfg), "names": self.RADAR_NAMES,
+                    "next": len(self.radar), "events": self.radar[max(0, since):]}
 
     def minutes_of(self, ts):
         return self.minutes(dt.datetime.fromtimestamp(ts, dt.timezone.utc).replace(tzinfo=None) + dt.timedelta(hours=8))
@@ -511,6 +612,26 @@ class Live:
         except Exception as e:
             log(f"  ! 收盤報價存檔失敗：{e}")
         self.save_flow()
+        self.save_radar()
+
+    def save_radar(self):
+        """買進雷達存檔：data/live/radar_last.js（服務關掉後網頁也看得到今天的訊號）與 radar_日期.json"""
+        if not self.radar:
+            return
+        try:
+            out = dict(self.radar_since(0), saved=F.now_tw().strftime("%H:%M:%S"))
+            d = self.date or F.now_tw().strftime("%Y%m%d")
+            folder = os.path.join(F.DATA_DIR, "live")
+            os.makedirs(folder, exist_ok=True)
+            body = json.dumps(out, ensure_ascii=False, separators=(",", ":"))
+            for name, text in (("radar_last.js", "window.TWFLOW_RADAR=" + body + ";\n"), (f"radar_{d}.json", body)):
+                p = os.path.join(folder, name)
+                tmp = f"{p}.{os.getpid()}.tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(text)
+                os.replace(tmp, p)
+        except Exception as e:
+            log(f"  ! 買進雷達存檔失敗：{e}")
 
     def snapshot(self):
         with self.lock:
@@ -539,7 +660,7 @@ def status_now(cfg):
 
 # ----------------------------------------------------------------- 輪詢
 MIS = None
-LIVE_VERSION = 6          # 盤中服務版本：新版啟動時若發現舊版（2 以上）在跑，會請它結束後接手（v3：直接開 dashboard.html 也能連、收盤報價存檔；v4：早上補抓到新資料會自動換參考資料；v5：大盤開盤價與分時）
+LIVE_VERSION = 7          # 盤中服務版本：新版啟動時若發現舊版（2 以上）在跑，會請它結束後接手（v3：直接開 dashboard.html 也能連、收盤報價存檔；v4：早上補抓到新資料會自動換參考資料；v5：大盤開盤價與分時；v7：買進雷達）
 QUIT = threading.Event()  # 收到「交棒」要求時結束整個服務
 
 
@@ -642,6 +763,13 @@ def make_handler(live):
                 return self._json(live.snapshot())
             if p == "/api/flow":
                 return self._json(live.sector_flow())
+            if p == "/api/radar":
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                try:
+                    since = max(0, int((q.get("since") or ["0"])[0]))
+                except ValueError:
+                    since = 0
+                return self._json(live.radar_since(since))
             if p == "/api/stock":
                 q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 code = (q.get("code") or [""])[0].strip()
