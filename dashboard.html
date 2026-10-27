@@ -306,6 +306,8 @@ tr.newrow td{ background:color-mix(in srgb, var(--up) 10%, transparent); animati
 <!--FUND-->
 <!--CHIPS-->
 <!--MARKET-->
+<!--ETF-->
+<!--MACRO-->
 <script>
 'use strict';
 /* ================= 基本工具 ================= */
@@ -975,8 +977,8 @@ function drawKline(container, cfg) {
   V.e = clamp(V.e, Math.min(NB, 15), NB); V.s = clamp(V.s, 0, V.e - Math.min(NB, 15));
   const W = Math.max(320, container.clientWidth), mobile = W < 600;
   const pad = { l: 6, r: mobile ? 50 : 60, t: 10, b: 20 };
-  const hP = mobile ? 240 : 300, hV = mobile ? 54 : 64, hI = cfg.show.inst ? (mobile ? 54 : 64) : 0, hS = cfg.show.score ? (mobile ? 54 : 64) : 0, gap = 14;
-  const panels = [['p', hP], ['v', hV], ...(hI ? [['i', hI]] : []), ...(hS ? [['s', hS]] : [])];
+  const hP = mobile ? 240 : 300, hV = cfg.noVol ? 0 : mobile ? 54 : 64, hI = cfg.show.inst ? (mobile ? 54 : 64) : 0, hS = cfg.show.score ? (mobile ? 54 : 64) : 0, gap = 14;
+  const panels = [['p', hP], ...(hV ? [['v', hV]] : []), ...(hI ? [['i', hI]] : []), ...(hS ? [['s', hS]] : [])];
   const top = {}; let yy = pad.t; for (const [k, hh] of panels) { top[k] = yy; yy += hh + gap; }
   const H = yy - gap + pad.b, iw = W - pad.l - pad.r;
   const s0 = Math.floor(V.s), e0 = Math.ceil(V.e), n = V.e - V.s, bw = iw / n;
@@ -1022,10 +1024,10 @@ function drawKline(container, cfg) {
       const buy = m.type === 'buy', y = buy ? Y(B[k].l) + 5 : Y(B[k].h) - 5;
       g.appendChild(s('path', { d: buy ? `M${x},${y}l${sz},${sz * 1.6}h${-2 * sz}Z` : `M${x},${y}l${sz},${-sz * 1.6}h${-2 * sz}Z`, fill: buy ? 'var(--up)' : 'var(--down)', stroke: 'var(--surface)', 'stroke-width': 1 })); } }
   // 成交量
-  let vmax = 1; for (const k of vis) vmax = Math.max(vmax, B[k].vol || 0);
+  if (hV) { let vmax = 1; for (const k of vis) vmax = Math.max(vmax, B[k].vol || 0);
   const vb = top.v + hV; svg.appendChild(s('line', { x1: pad.l, x2: W - pad.r, y1: vb, y2: vb, class: 'ax' }));
   svg.appendChild(s('text', { x: W - pad.r + 5, y: top.v + 9 }, fmtBig(vmax))); svg.appendChild(s('text', { x: W - pad.r + 5, y: vb - 1 }, cfg.volUnit || '張'));
-  for (const k of vis) { const b = B[k], hh = (b.vol || 0) / vmax * (hV - 4); g.appendChild(s('rect', { x: X(k) - cw / 2, y: vb - hh, width: cw, height: hh, fill: b.c >= b.o ? 'var(--up)' : 'var(--down)', opacity: 0.55 })); }
+  for (const k of vis) { const b = B[k], hh = (b.vol || 0) / vmax * (hV - 4); g.appendChild(s('rect', { x: X(k) - cw / 2, y: vb - hh, width: cw, height: hh, fill: b.c >= b.o ? 'var(--up)' : 'var(--down)', opacity: 0.55 })); } }
   // 法人
   if (hI) { let im = 0.01; for (const k of vis) im = Math.max(im, Math.abs(B[k].inst || 0)); const z = top.i + hI / 2;
     svg.appendChild(s('line', { x1: pad.l, x2: W - pad.r, y1: z, y2: z, class: 'ax' })); svg.appendChild(s('text', { x: W - pad.r + 5, y: top.i + 9 }, '+' + fmtYi(im))); svg.appendChild(s('text', { x: W - pad.r + 5, y: top.i + hI }, '−' + fmtYi(im)));
@@ -1062,7 +1064,7 @@ function drawKline(container, cfg) {
     showTip(container, tip, x * rc.width / W, top.p * rc.height / H + 20, [
       h('div', { style: { fontWeight: 650 } }, fmtK(b.d, cfg.period, true)),
       tipRow('開／高', fmt.px(b.o) + '／' + fmt.px(b.h)), tipRow('低／收', fmt.px(b.l) + '／' + fmt.px(b.c)), tipRow('漲跌', isNaN(chg) ? '—' : fmt.pct(chg), cls(chg)),
-      tipRow(cfg.volName || '成交量', b.vol == null ? '—' : cfg.volFmt ? cfg.volFmt(b.vol) : Math.round(b.vol || 0).toLocaleString('en-US') + ' 張'), b.inst != null ? tipRow(cfg.instName || '法人', cfg.instFmt ? cfg.instFmt(b.inst) : fmt.yiu(b.inst), cls(b.inst)) : null,
+      cfg.noVol ? null : tipRow(cfg.volName || '成交量', b.vol == null ? '—' : cfg.volFmt ? cfg.volFmt(b.vol) : Math.round(b.vol || 0).toLocaleString('en-US') + ' 張'), b.inst != null ? tipRow(cfg.instName || '法人', cfg.instFmt ? cfg.instFmt(b.inst) : fmt.yiu(b.inst), cls(b.inst)) : null,
       ...(cfg.tipExtra ? cfg.tipExtra(b) : []),
       b.sc != null && isFinite(b.sc) ? tipRow(cfg.scoreLabel || '動能', b.sc.toFixed(1)) : null,
       ...cfg.ma.map(m => MA[m][k] != null ? tipRow(m + ' 均', fmt.px(+MA[m][k].toFixed(2))) : null),
@@ -1560,7 +1562,7 @@ function buildShell() {
         h('div', { class: 'brand' }, logo(), '法人資金流向'),
         h('span', { class: 'mkt-chip hide-m', id: 'mktchip' }),
         h('div', { class: 'spacer' }),
-        searchBox(i => goStock(M.codes[i])),
+        searchBox(i => goStock(M.codes[i]), null, { etf: true }),
         h('select', { class: 'ctl', id: 'dateSel', 'aria-label': '資料日期', onchange: e => { App.t = +e.target.value; App.bt = null; stopPlay(); render(); } },
           M.dates.map((d, t) => h('option', { value: t }, fmt.fdate(d))).reverse()),
         h('select', { class: 'ctl', id: 'basisSel', 'aria-label': '法人口徑', title: '法人口徑', onchange: e => { S.basis = e.target.value; saveSettings(); setBasis(S.basis); render(); } },
@@ -1569,7 +1571,7 @@ function buildShell() {
         h('button', { class: 'iconbtn', title: '設定', 'aria-label': '設定', onclick: openSettings }, icon('gear')),
       ),
       h('nav', { class: 'tabs', id: 'tabs' },
-        [['overview', '總覽'], ['summary', '每日總結'], ['market', '大盤'], ['live', '盤中'], ['mom', '動能'], ['rank', '排行'], ['flows', '法人動向'], ['watch', '自選'], ['help', '說明']].map(([k, l]) => h('a', { href: '#' + k, 'data-k': k }, l)))),
+        [['overview', '總覽'], ['summary', '每日總結'], ['market', '大盤'], ['etf', 'ETF'], ['live', '盤中'], ['mom', '動能'], ['rank', '排行'], ['flows', '法人動向'], ['watch', '自選'], ['help', '說明']].map(([k, l]) => h('a', { href: '#' + k, 'data-k': k }, l)))),
     h('main', { id: 'main' }),
     h('div', { id: 'overlay' }));
   $('#dateSel').value = App.t; $('#basisSel').value = S.basis;
@@ -1580,15 +1582,22 @@ function icon(name) {
   const p = { bell: 'M12 3a6 6 0 0 0-6 6v4l-2 3h16l-2-3V9a6 6 0 0 0-6-6zm-2 16a2 2 0 0 0 4 0', gear: 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zm8 3.5-2-.6-.5-1.3 1-1.8-1.7-1.7-1.8 1-1.3-.5L13.1 4h-2.2l-.6 2.1-1.3.5-1.8-1-1.7 1.7 1 1.8-.5 1.3L4 10.9v2.2l2 .6.5 1.3-1 1.8 1.7 1.7 1.8-1 1.3.5.6 2h2.2l.6-2 1.3-.5 1.8 1 1.7-1.7-1-1.8.5-1.3 2-.6z', play: 'M8 5v14l11-7z', pause: 'M7 5h4v14H7zM13 5h4v14h-4z' }[name];
   return s('svg', { width: 18, height: 18, viewBox: '0 0 24 24', 'aria-hidden': 'true' }, s('path', { d: p, fill: name === 'play' || name === 'pause' ? 'currentColor' : 'none', stroke: name === 'play' || name === 'pause' ? 'none' : 'currentColor', 'stroke-width': 1.7, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
 }
-function searchBox(onPick, placeholder) {
+function searchBox(onPick, placeholder, opts = {}) {
   const wrap = h('div', { class: 'search' }); const inp = h('input', { type: 'search', placeholder: placeholder || '搜尋代號或名稱', 'aria-label': '搜尋股票', autocomplete: 'off' });
   const res = h('div', { class: 'results hidden', role: 'listbox' }); let items = [], sel = 0;
   const close = () => res.classList.add('hidden');
-  const draw = () => { res.replaceChildren(...items.map((i, k) => h('button', { type: 'button', class: k === sel ? 'sel' : '', onmousedown: e => { e.preventDefault(); pick(i); } }, h('span', { class: 'muted' }, M.codes[i]), M.names[i], h('span', { class: 'muted tiny', style: { marginLeft: 'auto' } }, M.ind[i])))); res.classList.toggle('hidden', !items.length); };
-  const pick = i => { inp.value = ''; items = []; close(); inp.blur(); onPick(i); };
+  const draw = () => { res.replaceChildren(...items.map((i, k) => h('button', { type: 'button', class: k === sel ? 'sel' : '', onmousedown: e => { e.preventDefault(); pick(i); } },
+    typeof i === 'number' ? [h('span', { class: 'muted' }, M.codes[i]), M.names[i], h('span', { class: 'muted tiny', style: { marginLeft: 'auto' } }, M.ind[i])]
+      : [h('span', { class: 'muted' }, i.code), i.name, h('span', { class: 'muted tiny', style: { marginLeft: 'auto' } }, 'ETF・' + i.cat)]))); res.classList.toggle('hidden', !items.length); };
+  const pick = i => { inp.value = ''; items = []; close(); inp.blur(); if (typeof i === 'number') onPick(i); else goEtf(i.code); };
+  if (opts.etf) inp.addEventListener('focus', () => { if (typeof loadEtfScript === 'function') loadEtfScript().catch(() => {}); }, { once: true });
   inp.addEventListener('input', () => { const q = inp.value.trim().toLowerCase(); sel = 0; items = [];
     if (q) { for (let i = 0; i < M.N && items.length < 12; i++) if (M.codes[i].startsWith(q)) items.push(i);
-      for (let i = 0; i < M.N && items.length < 12; i++) if (!items.includes(i) && M.names[i].toLowerCase().includes(q)) items.push(i); }
+      for (let i = 0; i < M.N && items.length < 12; i++) if (!items.includes(i) && M.names[i].toLowerCase().includes(q)) items.push(i);
+      const L = opts.etf && window.TWFLOW_ETF_LIST;
+      if (L) { const ex = []; for (let j = 0; j < L.codes.length && items.length + ex.length < 12; j++) if (L.codes[j].toLowerCase().startsWith(q)) ex.push(j);
+        for (let j = 0; j < L.codes.length && items.length + ex.length < 12; j++) if (!ex.includes(j) && L.names[j].toLowerCase().includes(q)) ex.push(j);
+        const etfFirst = /^00/.test(q); const er = ex.map(j => ({ code: L.codes[j], name: L.names[j], cat: L.cat[j] })); items = etfFirst ? [...er, ...items].slice(0, 12) : [...items, ...er]; } }
     draw(); });
   inp.addEventListener('keydown', e => { if (e.key === 'ArrowDown') { sel = Math.min(items.length - 1, sel + 1); draw(); e.preventDefault(); } else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); draw(); e.preventDefault(); } else if (e.key === 'Enter' && items[sel] != null) pick(items[sel]); else if (e.key === 'Escape') close(); });
   inp.addEventListener('blur', () => setTimeout(close, 150));
@@ -1611,7 +1620,7 @@ function render() {
   parseRoute(); if (typeof momSync === 'function') momSync(); updateChips(); updateBell();
   $$('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.k === App.route || (App.route === 'stock' && a.dataset.k === 'watch' && false)));
   const main = $('#main'); main.replaceChildren(); main.classList.toggle('lay', LAY.on); App.buyAdvice = null; $$('.lumenu').forEach(x => x.remove());
-  const fn = { overview: viewOverview, summary: viewSummary, market: viewMarket, live: viewLive, mom: viewMom, rank: viewRank, flows: viewFlows, watch: viewWatch, stock: viewStock, help: viewHelp }[App.route] || viewOverview;
+  const fn = { overview: viewOverview, summary: viewSummary, market: viewMarket, live: viewLive, mom: viewMom, rank: viewRank, flows: viewFlows, watch: viewWatch, stock: viewStock, etf: viewEtf, help: viewHelp }[App.route] || viewOverview;
   fn(main);
   if (LAY.on) { layWatch(); layApply(); }
   if (App.route !== 'stock') window.scrollTo(0, 0);
@@ -1626,6 +1635,7 @@ function viewOverview(main) {
   const tiles = h('div', { class: 'tiles' },
     mk.taiex ? linkTile(tile('加權指數', fmt.px(mk.taiex.close), h('span', { class: 'num ' + cls(mk.taiex.pct) }, `${fmt.sint(mk.taiex.chg)} 點（${fmt.pct(mk.taiex.pct)}）`), sparkline(series('taiex'))), 'twse') : null,
     mk.tpex ? linkTile(tile('櫃買指數', fmt.px(mk.tpex.close), h('span', { class: 'num ' + cls(mk.tpex.pct) }, `${fmt.yi(mk.tpex.chg)} 點（${fmt.pct(mk.tpex.pct)}）`), sparkline(series('tpex'))), 'tpex') : null,
+    macroTile('brent', t === M.T - 1 ? null : M.dates[t]), macroTile('usdtwd', t === M.T - 1 ? null : M.dates[t]),
     tile('多空比例', `${Math.round(ud.up / Math.max(1, ud.up + ud.dn) * 100)} : ${Math.round(ud.dn / Math.max(1, ud.up + ud.dn) * 100)}`, null,
       h('div', null, h('div', { class: 'ratio' }, h('i', { style: { flex: ud.up, background: 'var(--up)' } }), h('i', { style: { flex: ud.dn, background: 'var(--down)' } })),
         h('div', { class: 'tiny ink2 num' }, `漲 ${ud.up}・跌 ${ud.dn}・平 ${ud.fl}（上市櫃普通股）`))),
@@ -1883,7 +1893,8 @@ function viewWatch(main) {
 /* ---------- 個股頁 ---------- */
 function viewStock(main) {
   const i = M.idx.get(App.arg);
-  if (i == null) { main.append(card('找不到這檔股票', null, h('p', null, `資料中沒有代號 ${App.arg}（目前只收錄上市櫃普通股）。`))); return; }
+  if (i == null && /^00\d{2,4}[A-Z]?$/.test(App.arg || '')) { location.replace('#etf/' + App.arg); return; }   // ETF 另有頁面
+  if (i == null) { main.append(card('找不到這檔股票', null, h('p', null, `資料中沒有代號 ${App.arg}（目前只收錄上市櫃普通股；ETF 請到「ETF」分頁）。`))); return; }
   const tEnd = App.t; const t0 = Math.max(0, tEnd - 29); const days = []; for (let k = t0; k <= tEnd; k++) days.push(k);
   if (App.stockSel == null || App.stockSel.i !== i || App.stockSel.t > tEnd || App.stockSel.t < t0) App.stockSel = { i, t: tEnd };
   const sel = () => App.stockSel.t;
@@ -2037,6 +2048,10 @@ function viewHelp(main) {
     h('h2', null, '泡泡圖怎麼看'),
     h('p', { class: 'formula' }, '橫軸 X = 近 5 日板塊法人淨流入（億）\n縱軸 Y = 近 5 日平均每日淨流入 − 近 20 日平均每日淨流入（億／天）\n泡泡大小 = 板塊近 20 日成交金額；顏色 = 板塊近 5 日漲跌幅（成交值加權）'),
     h('p', null, '右上「加速流入」：近期買得比過去 20 天更兇；右下「流入但放緩」：還在買但力道變小；左上「流出但放緩」：還在賣但賣壓減輕；左下「加速流出」：賣得比過去 20 天更兇。板塊淨流入是成分股法人金額直接加總，一檔股票屬於多個板塊時，每個板塊都會計入。預設使用開根號刻度，避免少數大板塊把其他板塊擠在一起。泡泡在右邊卻是跌色，代表法人在股價下跌時買進。'),
+    h('h2', null, 'ETF 分頁'),
+    h('p', null, '列出上市櫃所有 ETF 的收盤、漲跌（含配息調整）、成交金額、三大法人買賣超（張數 × 當日均價估算）、融資與受益單位。分類（市值型、高股息、主動式、台股主題、海外股票、債券、槓桿反向、商品期貨、平衡）是依代號結尾與名稱自動判斷，僅供參考。受益單位增加＝投資人申購、資金流入；減少＝贖回。ETF 的自營商（避險）多半是造市避險，雜訊大。點任一檔可看 K 線、每日法人、受益單位與集保受益人數；上方搜尋框也找得到 ETF。'),
+    h('h2', null, '油價與匯率'),
+    h('p', null, '「大盤」分頁的「油價・匯率」：布蘭特原油近月期貨（美元／桶）與美元兌台幣（1 美元換多少台幣，變大＝台幣貶值），資料來自 Yahoo Finance（抓不到時改用美國 FRED 的收盤價），每次執行 run.bat 時更新；總覽上方也有兩個小方塊。'),
     h('h2', null, '板塊分類'),
     h('p', null, '板塊對照檔是資料夾裡的 sectors.csv（板塊名稱, 股票代號, 股票名稱, 分類）。產業別取自證交所／櫃買的官方產業分類；概念股是初稿，請自行增刪。一檔股票可以出現在多個板塊。修改後重新執行 run.bat（或等下一次自動排程）就會生效；用 Excel 編輯時請另存成「CSV UTF-8」。'),
     h('h2', null, '資料來源與限制'),
@@ -2767,6 +2782,8 @@ async function pollLive() {
     stockLiveTick();
     radarTick();
     if (App.route === 'market' && App.liveMarket) App.liveMarket();
+    if (App.route === 'etf' && App.etfLive) App.etfLive();
+    $$('.tile[data-mk]').forEach(el => el._fill && el._fill());
     updateBell();
   } catch (e) { LIVE.ok = false; LIVE.err = e; if (App.route === 'live' && App.drawLive) App.drawLive(); }
 }
@@ -2774,7 +2791,7 @@ function startLive() { if (!LIVE_MODE || LIVE.timer) return; pollLive(); LIVE.ti
 function pushFocus() {
   if (!LIVE_MODE) return;
   let codes = watchCodes();
-  if (App.route === 'stock' && App.arg) codes = [App.arg, ...codes.filter(c => c !== App.arg)];   // 正在看的個股排第一，每 10 秒更新
+  if ((App.route === 'stock' || App.route === 'etf') && App.arg) codes = [App.arg, ...codes.filter(c => c !== App.arg)];   // 正在看的個股／ETF 排第一，每 10 秒更新
   if (MOMDATA.status === 'ready') withBaseX(() => { const t = X.T - 1; const set = new Set(codes); for (const st of MS.strategies) for (const i of strategyHits(st, t)) set.add(X.codes[i]); codes = [...set]; });
   const key = codes.slice().sort().join(',');
   if (key === LIVE.lastFocus) return; LIVE.lastFocus = key;
@@ -2878,7 +2895,7 @@ function drawLive(box) {
     h('div', { class: 'row', style: { marginBottom: '.6rem' } }, h('span', { class: 'envchip', style: { borderColor: d.status === 'open' ? 'var(--up)' : 'var(--muted)', color: d.status === 'open' ? 'var(--up)' : 'var(--muted)' } }, h('i', { style: { background: d.status === 'open' ? 'var(--up)' : 'var(--muted)' } }), LIVE_STATUS[d.status] || d.status),
       h('span', { class: 'small ink2' }, `最後更新 ${d.updated || '—'}・畫面每 10 秒更新・掃描 ${codes.length} 檔` + (d.cycleSec ? `・全市場一輪 ${d.cycleSec} 秒` : '') + (d.lagSec != null && d.status === 'open' ? `・報價時間落後約 ${d.lagSec} 秒` : '') + `・已發 ${d.requests} 個請求`, d.lagSec > 120 && d.status === 'open' ? h('b', { class: 'down' }, '（網站回應偏慢）') : null),
       LIVE.ok ? null : h('span', { class: 'tag warn' }, '連線中斷，顯示的是上一筆資料')),
-    h('div', { class: 'tiles' }, linkTile(ix('t00', '加權指數'), 'twse'), linkTile(ix('o00', '櫃買指數'), 'tpex'),
+    h('div', { class: 'tiles' }, linkTile(ix('t00', '加權指數'), 'twse'), linkTile(ix('o00', '櫃買指數'), 'tpex'), macroTile('brent'), macroTile('usdtwd'),
       h('div', { class: 'tile' }, h('div', { class: 'lab' }, '漲跌家數'), h('div', { class: 'val num' }, `${up} : ${dn}`), h('div', { class: 'ratio' }, h('i', { style: { flex: up, background: 'var(--up)' } }), h('i', { style: { flex: dn, background: 'var(--down)' } })), h('div', { class: 'tiny ink2' }, `平盤 ${fl}`)),
       h('div', { class: 'tile' }, h('div', { class: 'lab' }, '掃描範圍成交值'), h('div', { class: 'val num' }, Math.round(tv).toLocaleString('en-US') + ' 億')),
       h('div', { class: 'tile' }, h('div', { class: 'lab' }, '大筆資金突破'), h('div', { class: 'val num' }, evs.length + ' 檔'), h('div', { class: 'tiny ink2' }, nowNew.length ? `${nowNew.length} 檔是剛觸發的` : ''))),
@@ -3404,9 +3421,10 @@ function makeRiver(wrap, opts) {
   cv.addEventListener('pointermove', ev => { const hit = rowAt(ev); R.hover = hit ? hit[0] : null; if (reduce) draw();
     if (!hit) { hideTip(tip); return; } const r = hit[1].r, rc = cv.getBoundingClientRect();
     showTip(wrap, tip, ev.clientX - rc.left, ev.clientY - rc.top, [h('div', { style: { fontWeight: 650 } }, r.name, ' ', h('span', { class: 'tiny muted' }, r.type)),
-      tipRow(typeof opts.valName === 'function' ? opts.valName() : '淨流入', fmt.yiu(r.v, 2), cls(r.v)), tipRow('成交額', r.w != null ? fmt.int(r.w) + ' 億' : '—'), r.n ? tipRow('成分股', r.n + ' 檔') : null, opts.onPick && r.id != null ? h('div', { class: 'tiny muted' }, '點一下看成分股') : null]); });
+      tipRow(typeof opts.valName === 'function' ? opts.valName() : '淨流入', fmt.yiu(r.v, 2), cls(r.v)), tipRow('成交額', r.w != null ? fmt.int(r.w) + ' 億' : '—'), r.n ? tipRow('成分股', r.n + ' 檔') : null, opts.onPick ? h('div', { class: 'tiny muted' }, '點一下看成分股') : null]); });
   cv.addEventListener('pointerleave', () => { R.hover = null; hideTip(tip); if (reduce) draw(); });
-  cv.addEventListener('click', ev => { const hit = rowAt(ev); if (hit && opts.onPick && hit[1].r.id != null) opts.onPick(hit[1].r); });
+  cv.addEventListener('click', ev => { const hit = rowAt(ev); if (hit && opts.onPick) opts.onPick(hit[1].r); });
+  cv.style.cursor = opts.onPick ? 'pointer' : '';
   return { setFrame, resume: start };
 }
 
@@ -3421,16 +3439,61 @@ function flowWinCtl(onChange) {
   const box = h('span', { class: 'row', style: { gap: '.4rem', alignItems: 'center' } }, h('span', { class: 'small ink2' }, '間隔'), sg, h('label', { class: 'chk small' }, '自訂', inp, '分（最短 3）'));
   return box;
 }
+// 盤中河道圖點板塊：成分股在「同一個時段」（開盤到現在／最近 N 分鐘，回放時是那一分鐘）的主動買賣淨額
+async function drawLiveSectorDetail(el, sel, f, onClose) {
+  if (!sel) { el.replaceChildren(h('div', { class: 'tiny muted', style: { marginTop: '.6rem' } }, '點一下河道圖的板塊，看成分股在這段時間的主動買賣。')); return; }
+  const tok = el._tok = (el._tok || 0) + 1, K = flowK(), m = f ? f.m : null;
+  let rows = null, src = null;
+  if (liveUp() && FLOWD.src === 'live') {
+    try { const r = await fetch(`${LIVE_BASE}/api/sector?name=${encodeURIComponent(sel.name)}&m=${m == null ? '' : m}&k=${K || 0}`, { cache: 'no-store' });
+      if (r.ok) { const j = await r.json(); rows = j.rows; src = 'live'; } } catch (e) { /* 舊版服務沒有 /api/sector */ }
+  }
+  const sc = M.sectors.find(x => x.name === sel.name);
+  if (!rows && FLOWD.data && FLOWD.data.stocks && sc) {
+    const st = FLOWD.data.stocks;
+    rows = sc.m.map(i => { const c = M.codes[i], a = st[c]; return { code: c, name: M.names[i], z: a ? a[2] : null, chg: a && a[2] && a[3] ? (a[2] / a[3] - 1) * 100 : null, net: a ? a[0] : null, val: a ? a[1] : null }; });
+    src = 'file';
+  }
+  if (tok !== el._tok) return;
+  const closeBtn = h('button', { class: 'btn sm', onclick: () => onClose && onClose() }, '關閉');
+  if (!rows) {
+    if (sc) { App.selSector = sc.id; drawSectorDetail(el, App.t); el.prepend(h('div', { class: 'tiny warn', style: { marginTop: '.6rem' } }, '連不到盤中服務（或是舊版），先顯示這個板塊的盤後法人資料；重開 live.bat 後就能看盤中成分股。')); }
+    else el.replaceChildren(h('div', { class: 'row', style: { marginTop: '.6rem', justifyContent: 'space-between' } }, h('span', { class: 'small muted' }, `「${sel.name}」：連不到盤中服務，看不到成分股。`), closeBtn));
+    return;
+  }
+  rows.forEach(r => { r.outer = r.net != null && r.val > 0 ? (r.net / r.val + 1) / 2 : null; r.abs = Math.abs(r.net || 0); });
+  const tot = sum(rows.map(r => r.net || 0)), tv = sum(rows.map(r => r.val || 0)), nb = rows.filter(r => (r.net || 0) > 0).length, ns = rows.filter(r => (r.net || 0) < 0).length;
+  const winLab = src === 'file' ? '今天全天（存檔）' : (f ? (K ? `${minLab(Math.max(0, f.m - K))}～${f.label}` : `09:00～${f.label}`) : flowKLab());
+  const box = h('div');
+  const drawT = () => box.replaceChildren(sortTable('liveSecM', [
+    { k: 'name', label: '股票', v: r => r.code, cell: r => h('td', null, h('span', { class: 'stk' }, h('span', { class: 'code' }, r.code), r.name)) },
+    { k: 'z', label: '現價', r: 1, v: r => r.z, f: v => fmt.px(v) },
+    { k: 'chg', label: '漲跌', r: 1, v: r => r.chg, cell: r => pctCell(r.chg == null ? NaN : r.chg, 2) },
+    { k: 'net', label: '主動買賣（億）', r: 1, v: r => r.net, cell: r => numCell(r.net) },
+    { k: 'abs', label: '影響大小', r: 1, v: r => r.abs, cell: r => h('td', { class: 'r' }, h('span', { class: 'bar', style: { display: 'inline-block', height: '.5rem', borderRadius: '2px', width: (tot || r.abs) ? Math.round(Math.min(1, r.abs / Math.max(...rows.map(x => x.abs), 1e-9)) * 60) + 'px' : '0', background: (r.net || 0) >= 0 ? 'var(--up)' : 'var(--down)', opacity: 0.75 } })) },
+    { k: 'val', label: '成交額（億）', r: 1, v: r => r.val, f: v => v == null ? '—' : v.toFixed(2) },
+    { k: 'outer', label: '外盤比', r: 1, v: r => r.outer, f: v => v == null ? '—' : Math.round(v * 100) + '%' },
+  ], rows, { k: 'abs', dir: 'desc' }, { redraw: drawT, limit: 30, onRow: r => goStockX(r.code), empty: '這段時間成分股都還沒有成交' }));
+  drawT();
+  el.replaceChildren(h('div', { style: { borderTop: '1px solid var(--border)', marginTop: '.8rem', paddingTop: '.8rem' } },
+    h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('h3', { style: { margin: 0 } }, sel.name, ' ', sc ? sectorTypeTag(sc.type) : null, h('span', { class: 'tag' }, winLab)), closeBtn),
+    h('div', { class: 'kv', style: { margin: '.6rem 0' } }, kv('主動買賣淨額', fmt.yiu(tot, 2), cls(tot)), kv('成交額', fmt.int(tv) + ' 億'), kv('偏買／偏賣', `${nb}／${ns} 檔`), kv('成分股', rows.length + ' 檔')),
+    box,
+    h('div', { class: 'tiny muted', style: { marginTop: '.3rem' } }, src === 'file' ? '盤中服務沒開：存檔只有每檔今天全天的累計，沒有分時段。' : '主動買賣＝外盤成交額 − 內盤成交額（報價快照估算）；「影響大小」依淨額絕對值排序，點一列看個股。回放時顯示那一分鐘的時段。')));
+}
 function flowCard(o = {}) {
   const fixed = o.mode;   // 盤中分頁固定用 live
   const el = h('section', { class: 'card flowcard' });
   const head = h('div'), tiles = h('div', { class: 'flowtiles' }), wrap = h('div', { class: 'chart' }), note = h('div', { class: 'tiny muted', style: { marginTop: '.4rem' } });
   const range = h('input', { type: 'range', min: 0, max: 0, value: 0, 'aria-label': '回放時間' }), lab = h('span', { class: 'pd small' });
   const playBtn = h('button', { class: 'btn', type: 'button', onclick: () => togglePlay() }, icon('play'), ' 回放');
-  const detail = o.detailEl || null;
-  let frames = [], idx = 0, follow = true, timer = null, play = null;
+  const detail = o.detailEl || h('div');   // 點河道圖的板塊 → 下方顯示成分股（盤中分頁原本沒有這一塊，點了沒反應）
+  let frames = [], idx = 0, follow = true, timer = null, play = null, detTimer = null;
   const mode = () => fixed || App.flowMode;
-  const river = makeRiver(wrap, { valName: () => mode() === 'live' ? '主動買賣淨額' : '法人淨流入', onPick: r => { App.selSector = r.id; if (detail) drawSectorDetail(detail, mode() === 'eod' && frames[idx] ? frames[idx].t : App.t); } });
+  const selKey = () => fixed ? 'flowSelLive' : 'flowSel';
+  const showDetail = () => { if (mode() === 'live') drawLiveSectorDetail(detail, App[selKey()], frames[idx], () => { App[selKey()] = null; showDetail(); }); else drawSectorDetail(detail, frames[idx] ? frames[idx].t : App.t); };
+  const showDetailSoon = () => { clearTimeout(detTimer); detTimer = setTimeout(showDetail, 350); };
+  const river = makeRiver(wrap, { valName: () => mode() === 'live' ? '主動買賣淨額' : '法人淨流入', onPick: r => { App.selSector = r.id; App[selKey()] = { name: r.name, id: r.id }; showDetail(); detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } });
   const show = k => {
     if (!frames.length) return; idx = clamp(k, 0, frames.length - 1); const f = frames[idx];
     river.setFrame(flowPickRows(f.rows));
@@ -3441,9 +3504,10 @@ function flowCard(o = {}) {
     head.querySelector('.clock').textContent = f.label; head.querySelector('.fsub').textContent = f.sub;
     range.max = frames.length - 1; range.value = idx; lab.textContent = f.label + (idx === frames.length - 1 ? '（最新）' : '');
     follow = idx === frames.length - 1;
-    if (mode() === 'eod' && detail) drawSectorDetail(detail, f.t);
+    if (mode() === 'eod') drawSectorDetail(detail, f.t);
+    else if (App[selKey()] && !play) showDetailSoon();
   };
-  const stopPlay_ = () => { if (play) { clearInterval(play); play = null; playBtn.replaceChildren(icon('play'), ' 回放'); } };
+  const stopPlay_ = () => { if (play) { clearInterval(play); play = null; playBtn.replaceChildren(icon('play'), ' 回放'); if (mode() === 'live' && App[selKey()]) showDetailSoon(); } };
   function togglePlay() {
     if (play) { stopPlay_(); return; }
     if (idx >= frames.length - 1) idx = 0;
@@ -3463,7 +3527,7 @@ function flowCard(o = {}) {
     show(follow ? frames.length - 1 : Math.min(idx, frames.length - 1));
   };
   const controls = () => h('div', { class: 'row', style: { marginBottom: '.6rem', alignItems: 'center' } },
-    fixed ? null : seg([['eod', '盤後・法人'], ['live', '盤中・主動買賣']], App.flowMode, v => { App.flowMode = v; follow = true; redrawControls(); build(); }),
+    fixed ? null : seg([['eod', '盤後・法人'], ['live', '盤中・主動買賣']], App.flowMode, v => { App.flowMode = v; follow = true; redrawControls(); build().then(showDetail); }),
     mode() === 'eod' ? seg([['1', '當日'], ['5', '近 5 日'], ['20', '近 20 日']], String(App.flowN), v => { App.flowN = +v; build(); }) : seg([['day', '開盤到現在'], ['win', '最近 N 分鐘']], App.flowLiveK, v => { App.flowLiveK = v; LS.set('flowLiveK', v); redrawControls(); build(); }),
     mode() === 'live' && App.flowLiveK === 'win' ? flowWinCtl(() => build()) : null,
     h('select', { class: 'ctl', 'aria-label': '顯示幾名', onchange: e => { App.flowTop = +e.target.value; LS.set('flowTop', App.flowTop); show(idx); } }, [[8, '流入／流出各 8 名'], [15, '各 15 名'], [0, '全部板塊']].map(([v, l]) => h('option', { value: v, selected: App.flowTop === v }, l))),
@@ -3476,8 +3540,8 @@ function flowCard(o = {}) {
   redrawControls();
   el.append(head, ctlBox, tiles, wrap, h('div', { class: 'player' }, playBtn, range, lab), note,
     h('div', { class: 'legend', style: { marginTop: '.4rem' } }, h('span', null, h('i', { class: 'box', style: { background: 'var(--l1)', borderRadius: '50%' } }), '產業'), h('span', null, h('i', { class: 'box', style: { background: 'var(--l3)', borderRadius: '50%' } }), '概念'),
-      h('span', { class: 'tiny muted' }, '一檔股票屬於多個板塊時，每個板塊都會計入；滑鼠移到列上看數字，點一下看成分股。')), detail || '');
-  build();
+      h('span', { class: 'tiny muted' }, '一檔股票屬於多個板塊時，每個板塊都會計入；滑鼠移到列上看數字，點一下看成分股。')), detail);
+  build().then(() => { if (mode() === 'live') showDetail(); });
   // 盤中：每 30 秒更新（停在最新一格時跟著跑）
   const startTimer = () => { if (timer) return; timer = setInterval(() => { if (!el.isConnected) { clearInterval(timer); timer = null; return; } if (mode() === 'live' && !play) loadFlowData(true).then(() => { if (follow) build(); }); }, 30000); };
   startTimer();
@@ -3625,15 +3689,16 @@ function loadMarket() {
 }
 App.mkTab = App.mkTab || LS.get('mkTab', 'twse');
 App.mkK = App.mkK || { period: 'D', range: 130, night: false };
-const MK_NAME = { twse: '加權指數', tpex: '櫃買指數', tx: '台指期（近月）' };
+const MK_NAME = { twse: '加權指數', tpex: '櫃買指數', tx: '台指期（近月）', macro: '油價與匯率' };
 const MK_LIVE = { twse: 't00', tpex: 'o00' };
 const yiTxt = v => v == null || !isFinite(v) ? '—' : fmt.yi(v, 1) + ' 億';
 const kouTxt = v => v == null || !isFinite(v) ? '—' : fmt.sint(v) + ' 口';
 
 function viewMarket(main) {
   main.append(h('div', { class: 'row', style: { marginBottom: '.8rem', alignItems: 'center' } },
-    seg([['twse', '加權指數'], ['tpex', '櫃買指數'], ['tx', '台指期']], App.mkTab, v => { App.mkTab = v; LS.set('mkTab', v); render(); }),
-    h('span', { class: 'small muted' }, App.mkTab === 'tx' ? '期交所每日行情、三大法人未平倉、大額交易人' : '證交所／櫃買中心每日指數、成交金額、三大法人、融資、漲跌家數')));
+    seg([['twse', '加權指數'], ['tpex', '櫃買指數'], ['tx', '台指期'], ['macro', '油價・匯率']], App.mkTab, v => { App.mkTab = v; LS.set('mkTab', v); render(); }),
+    h('span', { class: 'small muted' }, App.mkTab === 'tx' ? '期交所每日行情、三大法人未平倉、大額交易人' : App.mkTab === 'macro' ? '布蘭特原油（美元／桶）、美元兌台幣匯率' : '證交所／櫃買中心每日指數、成交金額、三大法人、融資、漲跌家數')));
+  if (App.mkTab === 'macro') { viewMacro(main); return; }
   if (MKT.status !== 'ready') {
     main.append(card(MK_NAME[App.mkTab], null, h('p', { class: 'small muted' }, MKT.status === 'error' ? MKT.err.message : '載入中…')));
     if (MKT.status !== 'error') loadMarket().then(() => { if (App.route === 'market') render(); }, () => { if (App.route === 'market') render(); });
@@ -3650,7 +3715,7 @@ function mkKlineCard(getBars, o) {
   const build = () => { bars = klineAgg(getBars(), K.period); const r = K.period === 'D' ? K.range : K.period === 'W' ? 52 : 'all'; const n = bars.length, len = r === 'all' ? n : Math.min(n, +r); view = { s: n - len, e: n }; };
   const draw = () => {
     if (!bars.length) { chart.replaceChildren(h('div', { class: 'empty' }, '還沒有資料（下次 run.bat 執行後會補）')); return; }
-    drawKline(chart, { bars, ma: S.k.ma, show: { inst: S.k.inst && o.inst !== false, score: false }, thr: 0, view, period: K.period, zoomBox: zoom, label: o.label,
+    drawKline(chart, { bars, ma: S.k.ma, show: { inst: S.k.inst && o.inst !== false, score: false }, thr: 0, view, period: K.period, zoomBox: zoom, label: o.label, noVol: o.noVol,
       volUnit: o.volUnit, volName: o.volName, volFmt: o.volFmt, instLabel: o.instLabel, instName: o.instName, instFmt: o.instFmt, tipExtra: o.tipExtra });
   };
   const toolbar = () => h('div', { class: 'row', style: { marginBottom: '.5rem', alignItems: 'center' } },
@@ -3665,6 +3730,8 @@ function mkKlineCard(getBars, o) {
     h('div', { class: 'tiny muted', style: { marginTop: '.3rem' } }, '滑鼠滾輪或雙擊縮放、拖曳左右移動；手機兩指縮放、單指拖曳。')); if (box.isConnected) draw(); else requestAnimationFrame(draw); };
   build(); render_();
   box.redraw = () => draw();
+  // 盤中新報價：重新取資料（最後一根會變），縮放位置不變
+  box.refresh = () => { const n0 = bars.length, v0 = view ? { ...view } : null; build(); if (v0 && bars.length === n0) view = v0; else if (v0 && bars.length === n0 + 1 && v0.e >= n0) view = { s: v0.s + 1, e: v0.e + 1 }; if (box.isConnected) draw(); };
   return box;
 }
 
@@ -3887,6 +3954,386 @@ function viewTx(main) {
   drawF(); drawL();
   App.redrawMarket = () => { kl.redraw(); drawF(); drawL(); };
   App.liveMarket = null;
+}
+
+/* ================= 共用：動態載入 data 裡的 .js ================= */
+function loadJs(src, msg) { return new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = src; sc.onload = res; sc.onerror = () => { sc.remove(); rej(new Error(msg)); }; document.head.appendChild(sc); }); }
+async function gunzipB64(b64) {
+  if (typeof DecompressionStream === 'undefined') throw new Error('這個瀏覽器不支援解壓縮，請改用新版 Chrome、Edge 或 Safari');
+  const b = atob(b64); const bin = new Uint8Array(b.length); for (let k = 0; k < b.length; k++) bin[k] = b.charCodeAt(k);
+  return JSON.parse(await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
+}
+
+/* ================= 國際：布蘭特原油、美元兌台幣 ================= */
+const MACRO = { status: 'idle', data: null, err: null, promise: null };
+function loadMacro() {
+  if (MACRO.promise) return MACRO.promise;
+  MACRO.status = 'loading';
+  MACRO.promise = (async () => {
+    if (!window.TWFLOW_MACRO) await loadJs('data/macro.js', '找不到 data/macro.js（下次 run.bat 執行後會產生）');
+    MACRO.data = window.TWFLOW_MACRO; MACRO.status = 'ready';
+  })().catch(e => { MACRO.status = 'error'; MACRO.err = e; MACRO.promise = null; throw e; });
+  return MACRO.promise;
+}
+const MACRO_META = {
+  brent: { name: '布蘭特原油', unit: '美元／桶', dp: 2, color: 'var(--l2)', note: 'ICE 布蘭特原油近月期貨，美元計價（Yahoo Finance BZ=F；抓不到時改用 FRED 現貨收盤）' },
+  usdtwd: { name: '美元兌台幣', unit: '台幣／1 美元', dp: 3, color: 'var(--l1)', note: '1 美元可換多少台幣：數字變大＝台幣貶值、變小＝台幣升值（Yahoo Finance TWD=X）' },
+};
+const macroFmt = (k, v) => v == null || !isFinite(v) ? '—' : v.toFixed(MACRO_META[k].dp);
+// 截至某一天（yyyymmdd，省略＝最新）的最後一筆
+// 盤中服務（live.py v8）每分鐘抓的即時價；服務關掉後用 data/live/last.js 存的最後一筆
+function macroLive(k) { const src = liveUp() ? LIVE.data : LIVE.last; const o = src && src.macro && src.macro[k]; return o && o.p != null && o.d ? o : null; }
+function macroAt(k, upto) {
+  const a = macroAtDaily(k, upto); if (upto || !a) return a;
+  const o = macroLive(k); if (!o || o.d < a.d) return a;
+  const prevDaily = o.d === a.d ? (a.chg != null ? a.c - a.chg : null) : a.c;
+  const prev = o.prev != null ? o.prev : prevDaily, chg = prev != null ? o.p - prev : null;
+  return { ...a, d: o.d, c: o.p, chg, pct: prev ? chg / prev * 100 : null, live: o, same: o.d === a.d };
+}
+function macroAtDaily(k, upto) {
+  const x = MACRO.data && MACRO.data[k]; if (!x || !x.d.length) return null;
+  let q = x.d.length - 1; if (upto) while (q > 0 && x.d[q] > upto) q--;
+  while (q > 0 && x.c[q] == null) q--;
+  if (upto && x.d[q] > upto) return null;
+  let p = q - 1; while (p >= 0 && x.c[p] == null) p--;
+  const c = x.c[q], pc = p >= 0 ? x.c[p] : null, chg = pc != null ? c - pc : null;
+  return { q, d: x.d[q], c, chg, pct: pc ? chg / pc * 100 : null, x };
+}
+function macroBack(x, q, n) { let k = Math.max(0, q - n); while (k < q && x.c[k] == null) k++; return x.c[k]; }
+function macroTile(k, upto) {
+  const meta = MACRO_META[k], el = h('div', { class: 'tile link', role: 'link', tabindex: 0, title: '看' + meta.name + '走勢' });
+  el.addEventListener('click', () => goMarket('macro')); el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goMarket('macro'); } });
+  const lab = () => h('div', { class: 'lab' }, meta.name, h('span', { class: 'tiny muted' }, '（' + meta.unit + '）'));
+  const fill = () => {
+    const a = macroAt(k, upto);
+    if (!a) { el.replaceChildren(lab(), h('div', { class: 'val num' }, '—'), h('div', { class: 'dl tiny muted' }, '還沒有資料（下次 run.bat 執行後會有）')); return; }
+    const vals = []; for (let q = Math.max(0, a.q - 19); q <= a.q; q++) vals.push(a.x.c[q]);
+    if (a.live) { if (a.same) vals[vals.length - 1] = a.c; else { vals.push(a.c); vals.shift(); } }
+    el.replaceChildren(lab(), h('div', { class: 'val num' }, macroFmt(k, a.c)),
+      h('div', { class: 'dl' }, h('span', { class: 'num ' + cls(a.chg) }, a.chg == null ? '—' : `${a.chg > 0 ? '+' : a.chg < 0 ? '−' : ''}${Math.abs(a.chg).toFixed(meta.dp)}（${fmt.pct(a.pct)}）`),
+        h('span', { class: 'tiny muted' }, ' ' + (a.live ? macroTimeLab(a.live) : fmt.date(a.d)), k === 'usdtwd' && a.chg ? (a.chg > 0 ? '・台幣貶' : '・台幣升') : '')),
+      sparkline(vals), h('div', { class: 'go' }, a.live && liveUp() ? '即時・看走勢 ›' : '看走勢 ›'));
+  };
+  el.dataset.mk = k; el._fill = () => { if (MACRO.status === 'ready' && el.isConnected) fill(); };
+  if (MACRO.status === 'ready') fill();
+  else { el.append(lab(), h('div', { class: 'val num muted' }, '…')); loadMacro().then(fill, () => { el.replaceChildren(lab(), h('div', { class: 'val num' }, '—'), h('div', { class: 'dl tiny muted' }, '還沒有資料（下次 run.bat 執行後會有）')); }); }
+  return el;
+}
+function macroBars(k) {
+  const x = MACRO.data[k], out = [];
+  for (let q = 0; q < x.d.length; q++) { const c = x.c[q]; if (c == null) continue; const o = x.o[q] ?? c;
+    out.push({ d: x.d[q], o, h: Math.max(x.h[q] ?? c, o, c), l: Math.min(x.l[q] ?? c, o, c), c, vol: null, inst: null }); }
+  const lv_ = App.t === M.T - 1 ? macroLive(k) : null, last = out[out.length - 1];
+  if (lv_ && last && lv_.d === last.d) Object.assign(last, { c: lv_.p, h: Math.max(last.h, lv_.h || lv_.p, lv_.p), l: Math.min(last.l, lv_.l || lv_.p, lv_.p), live: true, x: { live: true } });
+  else if (lv_ && (!last || lv_.d > last.d)) { const o = lv_.o || lv_.prev || lv_.p; out.push({ d: lv_.d, o, h: Math.max(lv_.h || lv_.p, o, lv_.p), l: Math.min(lv_.l || lv_.p, o, lv_.p), c: lv_.p, vol: null, inst: null, live: true, x: { live: true } }); }
+  return out;
+}
+function macroTimeLab(o) { const d = new Date(o.t * 1000); return d.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }); }
+function viewMacro(main) {
+  if (MACRO.status !== 'ready') {
+    main.append(card('國際行情', null, h('p', { class: 'small muted' }, MACRO.status === 'error' ? MACRO.err.message : '載入中…')));
+    if (MACRO.status !== 'error') loadMacro().then(() => { if (App.route === 'market' && App.mkTab === 'macro') render(); }, () => { if (App.route === 'market' && App.mkTab === 'macro') render(); });
+    return;
+  }
+  const keys = Object.keys(MACRO_META).filter(k => MACRO.data[k] && MACRO.data[k].d.length);
+  if (!keys.length) { main.append(card('國際行情', null, h('p', { class: 'small muted' }, '還沒有資料：下次 run.bat 執行時會抓布蘭特原油與美元兌台幣（Yahoo Finance）。'))); return; }
+  const upto = App.t === M.T - 1 ? null : M.dates[App.t];
+  const head = h('div', { class: 'card nolay' });
+  const drawHead = () => head.replaceChildren(h('div', { class: 'grid', style: { gridTemplateColumns: 'repeat(auto-fit,minmax(16rem,1fr))', gap: '1rem' } }, keys.map(k => {
+    const meta = MACRO_META[k], a = macroAt(k, upto); if (!a) return h('div', null, meta.name, '：這天之前沒有資料');
+    const x = a.x, info = x.info || {}, ret = n => { const b = macroBack(x, a.q, n); return b ? (a.c / b - 1) * 100 : null; };
+    let hi = -Infinity, lo = Infinity; for (let q = Math.max(0, a.q - 249); q <= a.q; q++) if (x.c[q] != null) { hi = Math.max(hi, x.h[q] ?? x.c[q]); lo = Math.min(lo, x.l[q] ?? x.c[q]); }
+    if (a.live) { hi = Math.max(hi, a.c); lo = Math.min(lo, a.c); }
+    const upd = !upto && info.price != null && info.time ? new Date(info.time * 1000) : null;
+    const pts = a.live && a.live.pts ? a.live.pts.map(p => p[1]) : [];
+    const sub = a.live ? (liveUp() ? h('span', { class: 'tag acc' }, `即時・台北 ${macroTimeLab(a.live)}・每分鐘更新`) : h('span', { class: 'tag warn' }, `盤中服務最後抓到 台北 ${macroTimeLab(a.live)}`))
+      : (upd ? `（台北 ${upd.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })} 更新）` : '');
+    return h('div', null,
+      h('div', { class: 'stockhead' }, h('div', null, h('div', { class: 'nm' }, meta.name), h('div', { class: 'small ink2' }, meta.unit, '・', fmt.fdate(a.d), ' ', sub)),
+        h('div', null, h('div', { class: 'px num ' + cls(a.chg) }, macroFmt(k, a.c)), h('div', { class: 'num ' + cls(a.chg) }, a.chg == null ? '—' : `${a.chg > 0 ? '▲' : a.chg < 0 ? '▼' : ''}${Math.abs(a.chg).toFixed(meta.dp)}（${fmt.pct(a.pct)}）`)),
+        pts.length > 2 ? h('div', null, h('div', { class: 'tiny muted' }, '今日走勢（5 分鐘）'), sparkline(pts, 160, 34)) : null),
+      h('div', { class: 'kv', style: { marginTop: '.6rem' } }, kv('近 1 月', fmt.pct(ret(21)), cls(ret(21))), kv('近 3 月', fmt.pct(ret(63)), cls(ret(63))), kv('近 1 年', fmt.pct(ret(250)), cls(ret(250))),
+        kv('1 年高', macroFmt(k, hi)), kv('1 年低', macroFmt(k, lo)), a.live && a.live.h ? kv('今日高／低', `${macroFmt(k, a.live.h)}／${macroFmt(k, a.live.l)}`) : null),
+      k === 'usdtwd' ? h('div', { class: 'tiny muted', style: { marginTop: '.3rem' } }, '數字變大＝台幣貶值（外資匯出時常見）、變小＝台幣升值。') : null);
+  })));
+  drawHead();
+  // 走勢對照：近 N 天以第一天為 0%
+  App.mcN = App.mcN || 250;
+  const cmpEl = h('div', { class: 'chart' }), cmpLeg = h('div');
+  const drawCmp = () => {
+    const ser = keys.map(k => ({ k, name: MACRO_META[k].name, color: MACRO_META[k].color, x: MACRO.data[k] }));
+    const I = MKT.status === 'ready' && MKT.data.idx && MKT.data.idx.twse && MKT.data.idx.twse.d.length ? MKT.data.idx.twse : null;
+    if (I) ser.push({ k: 'taiex', name: '加權指數', color: 'var(--l3)', x: { d: I.d, c: I.c } });
+    let dates = [...new Set(ser.flatMap(s1 => s1.x.d))].sort(); if (upto) dates = dates.filter(d => d <= upto);
+    dates = dates.slice(-App.mcN);
+    const series = ser.map(s1 => { const m = new Map(s1.x.d.map((d, q) => [d, s1.x.c[q]])); let last = null, base = null;
+      const raw = dates.map(d => { const v = m.get(d); if (v != null) last = v; return last; });
+      base = raw.find(v => v != null);
+      return { name: s1.name, color: s1.color, raw, vals: raw.map(v => v == null || !base ? null : (v / base - 1) * 100), dash: s1.k === 'taiex' ? '5 3' : null }; });
+    drawLines(cmpEl, { dates, series, zero: true, fmtV: (v, sr) => fmt.pct(v), axisFmt: v => (v > 0 ? '+' : '') + v.toFixed(0) + '%', label: '走勢對照', cls: true,
+      tipExtra: q => series.map(sr => sr.raw[q] != null ? tipRow(sr.name + ' 價位', sr.name === '加權指數' ? fmt.px(sr.raw[q]) : sr.raw[q].toFixed(sr.name === '美元兌台幣' ? 3 : 2)) : null) });
+    cmpLeg.replaceChildren(lineLegend(series));
+  };
+  const cmpCard = card('走勢對照', '以區間第一天為 0%，看油價、匯率與台股的相對變化', h('div', { class: 'row', style: { marginBottom: '.5rem' } },
+    seg([['66', '3 月'], ['130', '半年'], ['250', '1 年'], ['520', '2 年']], String(App.mcN), v => { App.mcN = +v; drawCmp(); })), cmpEl, cmpLeg,
+    MKT.status !== 'ready' ? h('div', { class: 'tiny muted' }, '加權指數要等大盤資料載入後才會出現。') : null);
+  const kls = keys.map(k => ({ k, el: mkKlineCard(() => macroBars(k), { label: MACRO_META[k].name, inst: false, noVol: true, note: MACRO_META[k].note }) }));
+  const src = keys.map(k => { const x = MACRO.data[k]; return h('li', null, `${MACRO_META[k].name}：${x.src || '—'}，${x.d.length} 天（${fmt.fdate(x.d[0])}～${fmt.fdate(x.d[x.d.length - 1])}），更新於 ${(x.updated || '').replace('T', ' ')}`); });
+  main.append(head, h('div', { class: 'grid g-main', style: { marginTop: '1rem' } },
+    h('div', { class: 'grid' }, ...kls.map(z => card(MACRO_META[z.k].name + ' K 線', MACRO_META[z.k].unit, z.el))),
+    h('div', { class: 'grid' }, cmpCard, card('資料來源', null, h('ul', { class: 'small' }, src),
+      h('p', { class: 'tiny muted' }, '盤中服務開著時（平日 08:40 排程或雙擊 live.bat）每分鐘即時更新；自己雙擊 live.bat 開的，收盤後也會繼續更新油價與匯率，直到關掉那個視窗。服務沒開時，用每次 run.bat（18:45／21:45）抓到的最新價。日期是 Yahoo 標示的交易日（美國時間）。')))));
+  drawCmp();
+  if (MKT.status !== 'ready' && MKT.status !== 'error') loadMarket().then(() => { if (App.route === 'market' && App.mkTab === 'macro') drawCmp(); }, () => {});
+  App.redrawMarket = () => { kls.forEach(z => z.el.redraw()); drawCmp(); };
+  App.liveMarket = () => { if (!head.isConnected) return; drawHead(); kls.forEach(z => z.el.refresh()); };
+}
+
+/* ================= ETF ================= */
+const ETF = { status: 'idle', err: null, promise: null, lp: null };
+function loadEtfScript() {
+  if (window.TWFLOW_ETF_LIST) return Promise.resolve();
+  if (!ETF.lp) ETF.lp = loadJs('data/etf.js', '找不到 data/etf.js（下次 run.bat 執行後會產生；第一次會先重算歷史資料，約多幾分鐘）').catch(e => { ETF.lp = null; throw e; });
+  return ETF.lp;
+}
+function loadEtf() {
+  if (ETF.promise) return ETF.promise;
+  ETF.status = 'loading';
+  ETF.promise = (async () => {
+    await loadEtfScript();
+    if (!window.TWFLOW_ETF_GZ) throw new Error('data/etf.js 內容不完整（可能正在寫入），請稍後再試');
+    buildEtf(await gunzipB64(window.TWFLOW_ETF_GZ));
+    window.TWFLOW_ETF_GZ = null; ETF.status = 'ready';
+  })().catch(e => { ETF.status = 'error'; ETF.err = e; ETF.promise = null; throw e; });
+  return ETF.promise;
+}
+function buildEtf(H) {
+  const E = ETF;
+  Object.assign(E, { codes: H.codes, names: H.names, mkt: H.mkt, cat: H.cat, cats: H.cats, listed: H.listed, days: H.days, N: H.codes.length, T: H.days.length, generated: H.generated });
+  E.dates = H.days.map(d => d.d); E.idx = new Map(H.codes.map((c, i) => [c, i]));
+  const { N, T } = E, last = new Float64Array(N).fill(NaN);
+  E.ret = []; E.px = []; for (const f of ['fi', 'it', 'dsf', 'dsh']) E[f + 'A'] = [];
+  for (let t = 0; t < T; t++) {
+    const d = E.days[t], rt = new Float64Array(N), px = new Float64Array(N);
+    for (let i = 0; i < N; i++) {
+      const c = d.c[i], rf = d.ref[i]; if (c != null) last[i] = c;
+      px[i] = d.vwap[i] != null ? d.vwap[i] : (c != null ? c : last[i]);
+      rt[i] = c != null && rf > 0 ? c / rf - 1 : 0; if (!isFinite(rt[i]) || Math.abs(rt[i]) > 0.6) rt[i] = 0;
+    }
+    E.ret.push(rt); E.px.push(px);
+    for (const f of ['fi', 'it', 'dsf', 'dsh']) { const a = new Float64Array(N); for (let i = 0; i < N; i++) { const v = d[f][i]; a[i] = v && px[i] ? v * px[i] / 1e5 : 0; } E[f + 'A'].push(a); }
+  }
+}
+const ETF_CAT_DESC = { '市值型': '追蹤台股大盤或市值前段（0050、006208…）', '高股息': '名稱含「息」的股息型（0056、00878、00919…）', '主動式': '經理人主動選股（代號 A 結尾）', '台股主題': '半導體、AI、ESG 等台股主題',
+  '海外股票': '美、日、中、全球等海外股市', '債券': '美債、公司債等（代號 B、D 結尾）', '槓桿反向': '正 2／反 1（代號 L、R 結尾）', '商品期貨': '黃金、原油、美元指數等期貨（代號 U 結尾）', '平衡': '股債平衡（代號 T 結尾）' };
+function etfT() { const E = ETF, dd = M.dates[App.t]; let t = E.T - 1; while (t > 0 && E.dates[t] > dd) t--; return t; }
+function etfNet(t, i) { return sum(BASIS[S.basis].parts.map(p => ETF[p + 'A'][t][i])); }
+function etfNetSh(t, i) { const d = ETF.days[t]; return sum(BASIS[S.basis].parts.map(p => d[p][i] || 0)); }
+function etfSum(fn, t, n, i) { let a = 0; for (let k = Math.max(0, t - n + 1); k <= t; k++) a += fn(k, i) || 0; return a; }
+function etfRet(t, n, i) { if (t - n + 1 < 1) return NaN; let a = 1; for (let k = t - n + 1; k <= t; k++) a *= 1 + ETF.ret[k][i]; return (a - 1) * 100; }
+function etfUnits(t, i) { const d = ETF.days[t]; return d.u ? d.u[i] : null; }
+function etfUnitsBack(t, n, i) { for (let k = Math.max(0, t - n); k < t; k++) { const u = etfUnits(k, i); if (u) return u; } return null; }
+function etfCatTag(cat) { return h('span', { class: 'tag' + (cat === '槓桿反向' ? ' warn' : cat === '主動式' ? ' acc' : '') }, cat); }
+function goEtf(code) { location.hash = '#etf/' + code; }
+// 盤中服務的 ETF 報價（今天、比 ETF 盤後資料新的才用）
+function etfSnap() { const d = stockSnap(); return ETF.status === 'ready' && d && d.etfs && d.etfFields && d.date && d.date > ETF.dates[ETF.T - 1] ? d : null; }
+function etfLv(d, c) { const a = d && d.etfs ? d.etfs[c] : null; if (!a) return null; const o = {}; d.etfFields.forEach((f, k) => o[f] = a[k]); return o.z ? o : null; }
+function etfRows(t, L) {
+  const E = ETF, d = E.days[t], rows = [], live = L && t === E.T - 1, p = live ? Math.max(0.05, liveProg()) : 1;
+  for (let i = 0; i < E.N; i++) {
+    const o = live ? etfLv(L, E.codes[i]) : null;
+    if (!o && d.c[i] == null && !d.val[i]) continue;
+    let v20 = 0, n20 = 0;
+    for (let k = Math.max(0, t - (o ? 19 : 20)); k < (o ? t + 1 : t); k++) { const v = E.days[k].val[i]; if (v != null) { v20 += v / 100; n20++; } }
+    const u = etfUnits(t, i), u0 = etfUnitsBack(t, 20, i);
+    let c = d.c[i], pct = E.ret[t][i] * 100, r5 = etfRet(t, 5, i), r20 = etfRet(t, 20, i), val = (d.val[i] || 0) / 100, vr = n20 && v20 ? val / (v20 / n20) : NaN;
+    if (o) { c = o.z; pct = o.y ? (o.z / o.y - 1) * 100 : NaN; const g = n => (1 + etfRet(t, n - 1, i) / 100) * (1 + (isNaN(pct) ? 0 : pct) / 100) * 100 - 100;
+      r5 = g(5); r20 = g(20); val = o.val || 0; vr = n20 && v20 ? val / (v20 / n20 * p) : NaN; }
+    rows.push({ i, code: E.codes[i], name: E.names[i], cat: E.cat[i], c, pct, r5, r20, val, vr, live: !!o,
+      net: etfNet(t, i), fi: E.fiA[t][i], it: E.itA[t][i], ds: E.dsfA[t][i] + E.dshA[t][i], n5: etfSum(etfNet, t, 5, i), n20: etfSum(etfNet, t, 20, i),
+      size: u && c ? u * c / 1e5 : null, uch: u && u0 ? (u / u0 - 1) * 100 : null, md: d.md ? d.md[i] : null });
+  }
+  return rows;
+}
+function viewEtf(main) {
+  if (ETF.status !== 'ready') {
+    main.append(card('ETF', null, h('p', { class: 'small muted' }, ETF.status === 'error' ? ETF.err.message : '正在載入 ETF 資料…')));
+    if (ETF.status !== 'error') loadEtf().then(() => { if (App.route === 'etf') render(); }, () => { if (App.route === 'etf') render(); });
+    else main.append(h('button', { class: 'btn', onclick: () => { ETF.status = 'idle'; render(); } }, '重試'));
+    return;
+  }
+  if (App.arg) viewEtfOne(main, App.arg); else viewEtfList(main);
+}
+App.etfCat = App.etfCat || LS.get('etfCat', 'all'); App.etfMin = App.etfMin ?? LS.get('etfMin', 0.1); App.etfQ = App.etfQ || '';
+function etfLiveNote(L) {
+  if (!L) return null;
+  const up = liveUp();
+  return h('span', { class: 'tag ' + (up ? 'acc' : 'warn') }, up ? `盤中即時・${L.updated || ''}${L.status === 'closed' ? '（已收盤）' : '・每 10 秒更新'}` : `盤中服務最後報價 ${L.saved || L.updated || ''}`);
+}
+function viewEtfList(main) {
+  const E = ETF, t = etfT(), dd = E.dates[t];
+  let L = null, all = [];
+  const refresh = () => { L = t === E.T - 1 ? etfSnap() : null; all = etfRows(t, L); };
+  refresh();
+  const tile = (lab, val, dl, c, txt) => h('div', { class: 'tile' }, h('div', { class: 'lab' }, lab), h('div', { class: 'val ' + (txt ? '' : 'num ') + (c || ''), style: txt ? { fontSize: '1.1rem', overflow: 'hidden', textOverflow: 'ellipsis' } : null, title: txt ? val : null }, val), dl ? h('div', { class: 'dl' }, dl) : null);
+  const tilesBox = h('div'), headNote = h('span'), catBox = h('div'), box = h('div'), countEl = h('span', { class: 'tiny muted' }), noteEl = h('div', { class: 'tiny muted', style: { marginTop: '.3rem' } });
+  const drawTiles = () => {
+    const totVal = sum(all.map(r => r.val)), mt = M.dates.indexOf(dd);
+    const lvStocks = L && liveUp() && LIVE.data === L ? sum(Object.values(L.stocks || {}).map(a => a[6] || 0)) : null;
+    const stkVal = L ? lvStocks : mt >= 0 ? sum(Array.from(M.valY[mt])) : null;
+    const tot = k => sum(all.map(r => r[k])), up = all.filter(r => r.pct > 0).length, dn = all.filter(r => r.pct < 0).length;
+    const topBuy = all.slice().sort((a, b) => b.net - a.net)[0], topSell = all.slice().sort((a, b) => a.net - b.net)[0];
+    const instLab = L ? `（${fmt.date(dd)}）` : '';
+    const ts = h('div', { class: 'tiles' },
+      tile(L ? 'ETF 盤中成交金額' : 'ETF 成交金額', fmt.int(totVal) + ' 億', stkVal ? h('span', { class: 'tiny ink2' }, `佔股票＋ETF 成交 ${(totVal / (totVal + stkVal) * 100).toFixed(1)}%`) : null),
+      tile(BASIS[S.basis].short + '買賣 ETF' + instLab, fmt.yiu(tot('net'), 1), h('span', { class: 'tiny ink2' }, `外資 ${fmt.yi(tot('fi'), 1)}・投信 ${fmt.yi(tot('it'), 1)}・自營 ${fmt.yi(tot('ds'), 1)}`), cls(tot('net'))),
+      tile(L ? '漲跌檔數（盤中）' : '漲跌檔數', `${up} : ${dn}`, h('div', null, h('div', { class: 'ratio' }, h('i', { style: { flex: up, background: 'var(--up)' } }), h('i', { style: { flex: dn, background: 'var(--down)' } })), h('div', { class: 'tiny ink2' }, `共 ${all.length} 檔有成交`))),
+      topBuy ? tile('法人買超最多' + instLab, topBuy.name, h('span', { class: 'num up' }, topBuy.code + '・' + fmt.yiu(topBuy.net)), null, true) : null,
+      topSell ? tile('法人賣超最多' + instLab, topSell.name, h('span', { class: 'num down' }, topSell.code + '・' + fmt.yiu(topSell.net)), null, true) : null);
+    ts.querySelectorAll('.tile').forEach((el, k) => { if (k >= 3) { el.classList.add('link'); el.addEventListener('click', () => goEtf((k === 3 ? topBuy : topSell).code)); } });
+    tilesBox.replaceChildren(ts);
+    headNote.replaceChildren(etfLiveNote(L));
+    noteEl.textContent = (L ? `盤中：收盤、漲跌、5／20 日、成交金額（用報價快照估算）、量比（與平常同一時間比）是即時的；法人、規模、受益單位、融資是 ${fmt.date(dd)} 盤後資料。` : '') +
+      '法人金額＝買賣超張數 × 當日均價估算。ETF 的「自營（避險）」大多是流動量提供者（造市）的避險部位，可以在右上角法人口徑改成「不含避險」。規模＝受益單位 × 收盤；上市 ETF 的受益單位只有最近約 60 個交易日。漲跌已含配息調整。';
+  };
+  const drawCat = () => {
+    const cats = (E.cats || [...new Set(E.cat)]).map(cat => { const rs = all.filter(r => r.cat === cat); const v = sum(rs.map(r => r.val));
+      return { cat, n: rs.length, val: v, pct: v ? sum(rs.map(r => (isNaN(r.pct) ? 0 : r.pct) * r.val)) / v : NaN, net: sum(rs.map(r => r.net)), n5: sum(rs.map(r => r.n5)), n20: sum(rs.map(r => r.n20)), size: sum(rs.map(r => r.size || 0)) }; }).filter(x => x.n);
+    catBox.replaceChildren(sortTable('etfcat', [
+      { k: 'cat', label: '類別', v: r => r.cat, cell: r => h('td', null, h('b', null, r.cat), h('div', { class: 'tiny muted' }, ETF_CAT_DESC[r.cat] || '')) },
+      { k: 'n', label: '檔數', r: 1, v: r => r.n },
+      { k: 'val', label: L ? '盤中成交（億）' : '成交（億）', r: 1, v: r => r.val, f: v => fmt.int(v) },
+      { k: 'pct', label: '漲跌*', r: 1, v: r => r.pct, cell: r => pctCell(r.pct) },
+      { k: 'net', label: L ? `法人 ${fmt.date(dd)}（億）` : '法人當日（億）', r: 1, v: r => r.net, cell: r => numCell(r.net) },
+      { k: 'n5', label: '5 日', r: 1, v: r => r.n5, cell: r => numCell(r.n5) },
+      { k: 'n20', label: '20 日', r: 1, v: r => r.n20, cell: r => numCell(r.n20) },
+      { k: 'size', label: '規模（億）', r: 1, v: r => r.size, f: v => v ? fmt.int(v) : '—' },
+    ], cats, { k: 'val', dir: 'desc' }, { redraw: drawCat, onRow: r => { App.etfCat = r.cat; LS.set('etfCat', r.cat); catSel.value = r.cat; drawTbl(); }, empty: '沒有資料' }));
+  };
+  const pick = () => { const q = App.etfQ.trim().toLowerCase();
+    return all.filter(r => (App.etfCat === 'all' || r.cat === App.etfCat) && r.val >= App.etfMin && (!q || r.code.toLowerCase().startsWith(q) || r.name.toLowerCase().includes(q))); };
+  const drawTbl = () => { const rows = pick(); countEl.textContent = `${rows.length} 檔`;
+    box.replaceChildren(sortTable('etf', [
+      { k: 'name', label: 'ETF', v: r => r.code, cell: r => h('td', null, h('span', { class: 'stk' }, h('span', { class: 'code' }, r.code), r.name), ' ', etfCatTag(r.cat)) },
+      { k: 'c', label: L ? '現價' : '收盤', r: 1, v: r => r.c, f: v => fmt.px(v) },
+      { k: 'pct', label: '漲跌', r: 1, v: r => r.pct, cell: r => pctCell(r.pct, 2) },
+      { k: 'r5', label: '5 日', r: 1, v: r => r.r5, cell: r => pctCell(r.r5) },
+      { k: 'r20', label: '20 日', r: 1, v: r => r.r20, cell: r => pctCell(r.r20) },
+      { k: 'val', label: L ? '盤中成交（億）' : '成交（億）', r: 1, v: r => r.val, f: v => v >= 10 ? v.toFixed(0) : v.toFixed(2) },
+      { k: 'vr', label: '量比', r: 1, v: r => r.vr, f: v => isNaN(v) ? '—' : v.toFixed(2) },
+      { k: 'net', label: BASIS[S.basis].short + (L ? ` ${fmt.date(dd)}` : '') + '（億）', r: 1, v: r => r.net, cell: r => numCell(r.net) },
+      { k: 'fi', label: '外資', r: 1, v: r => r.fi, cell: r => numCell(r.fi) },
+      { k: 'it', label: '投信', r: 1, v: r => r.it, cell: r => numCell(r.it) },
+      { k: 'ds', label: '自營', r: 1, v: r => r.ds, cell: r => numCell(r.ds) },
+      { k: 'n5', label: '法人 5 日', r: 1, v: r => r.n5, cell: r => numCell(r.n5) },
+      { k: 'n20', label: '法人 20 日', r: 1, v: r => r.n20, cell: r => numCell(r.n20) },
+      { k: 'size', label: '規模（億）', r: 1, v: r => r.size, f: v => v == null ? '—' : v >= 100 ? fmt.int(v) : v.toFixed(1) },
+      { k: 'uch', label: '受益單位 20 日', r: 1, v: r => r.uch, cell: r => pctCell(r.uch == null ? NaN : r.uch) },
+      { k: 'md', label: '融資增減', r: 1, v: r => r.md, cell: r => h('td', { class: 'r num ' + cls(r.md) }, r.md == null ? '—' : fmt.sint(r.md)) },
+    ], rows, { k: 'val', dir: 'desc' }, { redraw: drawTbl, limit: App.etfAll ? 1000 : 100, onRow: r => goEtf(r.code), empty: '沒有符合條件的 ETF' }),
+    !App.etfAll && rows.length > 100 ? h('button', { class: 'btn sm', style: { marginTop: '.4rem' }, onclick: () => { App.etfAll = true; drawTbl(); } }, `顯示全部 ${rows.length} 檔`) : null); };
+  const catCount = c => all.filter(r => r.cat === c).length;
+  const catSel = h('select', { class: 'ctl', 'aria-label': 'ETF 類別', onchange: e => { App.etfCat = e.target.value; LS.set('etfCat', App.etfCat); drawTbl(); } },
+    h('option', { value: 'all' }, `全部類別（${all.length}）`), (E.cats || []).filter(catCount).map(c => h('option', { value: c, selected: App.etfCat === c }, `${c}（${catCount(c)}）`)));
+  catSel.value = App.etfCat;
+  const minSel = h('select', { class: 'ctl', 'aria-label': '最低成交金額', onchange: e => { App.etfMin = +e.target.value; LS.set('etfMin', App.etfMin); drawTbl(); } },
+    [[0, '不限成交金額'], [0.1, '成交 ≥ 0.1 億'], [1, '成交 ≥ 1 億'], [10, '成交 ≥ 10 億']].map(([v, l]) => h('option', { value: v, selected: App.etfMin === v }, l)));
+  const qIn = h('input', { type: 'search', class: 'ctl', placeholder: '代號或名稱', value: App.etfQ, 'aria-label': '篩選 ETF', style: { minWidth: '9rem' }, oninput: e => { App.etfQ = e.target.value; drawTbl(); } });
+  drawTiles(); drawCat(); drawTbl();
+  main.append(h('div', { class: 'row', style: { marginBottom: '.8rem', alignItems: 'baseline' } }, h('b', null, 'ETF'), h('span', { class: 'small muted' }, `${fmt.fdate(dd)}・上市櫃 ETF 收盤、三大法人、融資、受益單位`), dd !== M.dates[App.t] ? h('span', { class: 'tag warn' }, '這天沒有 ETF 資料，顯示 ' + fmt.date(dd)) : null, headNote),
+    tilesBox,
+    h('div', { style: { marginTop: '1rem' } }, card('各類別 ETF', '點一列只看該類別；*漲跌為成交金額加權平均', catBox)),
+    h('div', { style: { marginTop: '1rem' } }, card('ETF 排行總表', '點欄位標題排序、點一列看該檔 ETF',
+      h('div', { class: 'row', style: { marginBottom: '.5rem', alignItems: 'center' } }, catSel, minSel, qIn, countEl), box, noteEl)));
+  // 盤中服務每 10 秒推新報價：只重畫數字，不動篩選與捲動位置
+  App.etfLive = () => { if (!box.isConnected) { App.etfLive = null; return; } refresh(); drawTiles(); drawCat(); drawTbl(); };
+}
+function viewEtfOne(main, code) {
+  const E = ETF, i = E.idx.get(code);
+  main.append(h('div', { class: 'row', style: { marginBottom: '.6rem' } }, h('button', { class: 'linkbtn', onclick: () => history.length > 1 ? history.back() : (location.hash = '#etf') }, '‹ 返回'), h('a', { href: '#etf', class: 'small' }, 'ETF 總表')));
+  if (i == null) { main.append(card('找不到這檔 ETF', null, h('p', null, `ETF 資料中沒有代號 ${code}。`))); return; }
+  const t = etfT(), d = E.days[t], name = E.names[i];
+  const u = etfUnits(t, i), u20 = etfUnitsBack(t, 20, i);
+  const holders = h('span', { class: 'muted' }, '…');
+  const head = h('div', { class: 'card nolay' });
+  const liveO = () => t === E.T - 1 ? etfLv(etfSnap(), code) : null;
+  const drawHead = () => {
+    const o = liveO(), L = o ? etfSnap() : null;
+    const c = o ? o.z : d.c[i], chg = o ? (o.y ? o.z - o.y : null) : d.chg[i], pct = o ? (o.y ? (o.z / o.y - 1) * 100 : NaN) : E.ret[t][i] * 100;
+    const vol = o ? o.v : d.vol[i], valY = o ? o.val : (d.val[i] != null ? d.val[i] / 100 : null);
+    let v20 = 0, n20 = 0; for (let k = Math.max(0, t - (o ? 19 : 20)); k < (o ? t + 1 : t); k++) { const v = E.days[k].val[i]; if (v != null) { v20 += v / 100; n20++; } }
+    const vr = n20 && v20 && valY != null ? valY / (v20 / n20 * (o ? Math.max(0.05, liveProg()) : 1)) : null;
+    const rN = n => o ? ((1 + etfRet(t, n - 1, i) / 100) * (1 + (isNaN(pct) ? 0 : pct) / 100) - 1) * 100 : etfRet(t, n, i);
+    head.replaceChildren(
+      h('div', { class: 'stockhead' },
+        h('div', null, h('div', { class: 'nm' }, name, ' ', h('span', { class: 'muted', style: { fontSize: '1rem', fontWeight: 400 } }, code)),
+          h('div', { class: 'small ink2' }, E.mkt[i] === 'L' ? '上市' : '上櫃', ' ETF・', etfCatTag(E.cat[i]))),
+        h('div', null, h('div', { class: 'px num ' + cls(chg) }, fmt.px(c)), h('div', { class: 'num ' + cls(chg) }, chg == null ? '—' : (chg > 0 ? '+' : chg < 0 ? '−' : '') + Math.abs(+chg.toFixed(2)), '（', fmt.pct(pct), '）')),
+        h('div', { class: 'small muted' }, o ? etfLiveNote(L) : [fmt.fdate(E.dates[t]), t !== E.T - 1 ? '（歷史）' : '']),
+        o ? h('div', { class: 'small ink2' }, `開 ${fmt.px(o.o)}・高 ${fmt.px(o.h)}・低 ${fmt.px(o.l)}`, o.u ? `・漲停 ${fmt.px(o.u)}` : '') : null),
+      h('div', { class: 'kv', style: { marginTop: '.7rem' } },
+        kv(o ? '盤中成交量' : '成交量', fmt.int(vol) + ' 張', null, o ? null : `均價 ${fmt.px(d.vwap[i])}`), kv(o ? '盤中成交金額' : '成交金額', valY != null ? valY.toFixed(2) + ' 億' : '—', null, vr != null ? `量比 ${vr.toFixed(2)}` : null),
+        kv('近 5 日', fmt.pct(rN(5)), cls(rN(5))), kv('近 20 日', fmt.pct(rN(20)), cls(rN(20))), kv('近 60 日', fmt.pct(rN(60)), cls(rN(60))), kv('近 1 年', fmt.pct(rN(245)), cls(rN(245)), '含配息'),
+        kv('規模', u && c ? fmt.int(u * c / 1e5) + ' 億' : '—', null, u ? `受益單位 ${(u / 1e5).toFixed(2)} 億${o ? `（${fmt.date(E.dates[t])}）` : ''}` : null),
+        kv('受益單位 20 日', u && u20 ? fmt.pct((u / u20 - 1) * 100) : '—', u && u20 ? cls(u - u20) : '', u && u20 ? (u > u20 ? '淨申購（資金流入）' : u < u20 ? '淨贖回（資金流出）' : '持平') : null),
+        kv('受益人數', holders), kv('融資餘額', d.mbal && d.mbal[i] != null ? fmt.int(d.mbal[i]) + ' 張' : '—', null, d.md && d.md[i] != null ? h('span', { class: cls(d.md[i]) }, fmt.sint(d.md[i])) : null)));
+  };
+  // K 線（盤中服務開著時，最後一根是今天的即時 K 棒）
+  const bars = () => { const out = []; for (let k = 0; k < E.T; k++) { const dk = E.days[k], cc = dk.c[i]; if (cc == null) continue;
+    out.push({ d: E.dates[k], o: dk.o[i] ?? cc, h: dk.h[i] ?? cc, l: dk.l[i] ?? cc, c: cc, vol: dk.vol[i] || 0, inst: etfNet(k, i), x: { u: dk.u ? dk.u[i] : null } }); }
+    const o = liveO(), L = o ? etfSnap() : null;
+    if (o && L && L.date) out.push({ d: L.date, o: o.o || o.z, h: Math.max(o.h || o.z, o.z), l: Math.min(o.l || o.z, o.z), c: o.z, vol: o.v || 0, inst: null, live: true, x: { live: true } });
+    return out; };
+  const kl = mkKlineCard(bars, { label: name, volUnit: '張', volName: '成交量', volFmt: v => fmt.int(v) + ' 張', instLabel: BASIS[S.basis].short + '（億）', instName: BASIS[S.basis].short, instFmt: v => fmt.yiu(v), instToggle: '法人',
+    tipExtra: b => [b.x && b.x.u ? tipRow('受益單位', (b.x.u / 1e5).toFixed(2) + ' 億') : null, b.x && b.x.live ? tipRow('今天', '盤中暫定') : null], note: 'K 線價格未還原配息（漲跌幅有含）。' });
+  // 每日法人
+  const flowEl = h('div', { class: 'chart' }); App.etfN = App.etfN || 60;
+  const drawFlow = () => { const k0 = Math.max(0, t - App.etfN + 1), ks = []; for (let k = k0; k <= t; k++) ks.push(k);
+    drawDivBars(flowEl, { dates: ks.map(k => E.dates[k]), vals: ks.map(k => etfNet(k, i)), label: '每日法人', tip: q => { const k = ks[q], dk = E.days[k];
+      return [tipRow(BASIS[S.basis].short, fmt.yiu(etfNet(k, i)), cls(etfNet(k, i))), tipRow('外資', `${fmt.yiu(E.fiA[k][i])}（${fmt.sint(dk.fi[i])} 張）`, cls(dk.fi[i])), tipRow('投信', `${fmt.yiu(E.itA[k][i])}（${fmt.sint(dk.it[i])} 張）`, cls(dk.it[i])),
+        tipRow('自營（自行）', `${fmt.yiu(E.dsfA[k][i])}（${fmt.sint(dk.dsf[i])} 張）`, cls(dk.dsf[i])), tipRow('自營（避險）', `${fmt.yiu(E.dshA[k][i])}（${fmt.sint(dk.dsh[i])} 張）`, cls(dk.dsh[i]))]; } }); };
+  const flowCard_ = card('每日法人買賣超', BASIS[S.basis].name + '（億）', h('div', { class: 'row', style: { marginBottom: '.5rem' } },
+    seg([['20', '20 天'], ['60', '60 天'], ['120', '半年']], String(App.etfN), v => { App.etfN = +v; drawFlow(); })), flowEl);
+  // 分項表
+  const comp = [['外資', 'fi'], ['投信', 'it'], ['自營（自行）', 'dsf'], ['自營（避險）', 'dsh']];
+  const cell = (v, sh) => h('td', { class: 'r num ' + cls(v) }, fmt.yi(v), h('div', { class: 'tiny muted' }, fmt.sint(sh) + ' 張'));
+  const shSum = (f, n) => { let a = 0; for (let k = Math.max(0, t - n + 1); k <= t; k++) a += E.days[k][f][i] || 0; return a; };
+  const aSum = (f, n) => { let a = 0; for (let k = Math.max(0, t - n + 1); k <= t; k++) a += E[f + 'A'][k][i]; return a; };
+  const partTbl = tbl(['法人', ['當日（億）', 'r'], ['近 5 日', 'r'], ['近 20 日', 'r'], ['近 60 日', 'r']], [
+    ...comp.map(([lab, f]) => h('tr', null, h('td', null, lab), ...[1, 5, 20, 60].map(n => cell(aSum(f, n), shSum(f, n))))),
+    h('tr', null, h('td', null, h('b', null, BASIS[S.basis].short)), ...[1, 5, 20, 60].map(n => cell(etfSum(etfNet, t, n, i), etfSum(etfNetSh, t, n, i))))]);
+  // 受益單位
+  const uEl = h('div', { class: 'chart' }), uKs = []; for (let k = 0; k <= t; k++) if (etfUnits(k, i)) uKs.push(k);
+  const drawU = () => { if (uKs.length < 2) { uEl.replaceChildren(h('div', { class: 'empty' }, '受益單位資料不足（上市 ETF 只有最近約 60 個交易日）')); return; }
+    drawLines(uEl, { dates: uKs.map(k => E.dates[k]), series: [{ name: '受益單位', color: 'var(--l1)', vals: uKs.map(k => etfUnits(k, i) / 1e5) }], fmtV: v => v.toFixed(3) + ' 億', axisFmt: v => v.toFixed(2), label: '受益單位',
+      tipExtra: q => { const k = uKs[q], p = uKs[q - 1], uu = etfUnits(k, i), cc = E.days[k].c[i];
+        return [p != null ? tipRow('增減', fmt.sint(uu - etfUnits(p, i)) + ' 張', cls(uu - etfUnits(p, i))) : null, p != null && cc ? tipRow('約當金額', fmt.yiu((uu - etfUnits(p, i)) * cc / 1e5), cls(uu - etfUnits(p, i))) : null, cc ? tipRow('規模', fmt.int(uu * cc / 1e5) + ' 億') : null]; } }); };
+  const uCard = card('受益單位（流通在外）', '增加＝投資人申購（資金流入），減少＝贖回', uEl);
+  // 受益人數（集保每週）
+  const hEl = h('div', { class: 'chart' });
+  const drawHolders = () => { if (CHIPS.status !== 'ready') return; const rows = CHIPS.data.d[code], W = CHIPS.data.w;
+    if (!rows) { holders.textContent = '—'; hEl.replaceChildren(h('div', { class: 'empty' }, '集保沒有這檔的資料（新增的 ETF 下週五起累積）')); return; }
+    const ks = W.map((_, k) => k).filter(k => rows[k]); if (!ks.length) return;
+    const lk = ks[ks.length - 1], pk = ks.length > 1 ? ks[ks.length - 2] : null, pp = rows[lk][4];
+    holders.replaceChildren(h('span', null, fmt.int(pp) + ' 人'), pk != null ? h('div', { class: 'tiny ' + cls(pp - rows[pk][4]) }, `比上週 ${fmt.sint(pp - rows[pk][4])}`) : null);
+    if (ks.length < 2) { hEl.replaceChildren(h('div', { class: 'empty' }, `目前只有 ${fmt.fdate(W[lk])} 一週（集保每週五更新，之後會累積）`)); return; }
+    drawLines(hEl, { dates: ks.map(k => W[k]), series: [{ name: '受益人數', color: 'var(--l2)', vals: ks.map(k => rows[k][4]) }], fmtV: v => fmt.int(v) + ' 人', axisFmt: v => v >= 1e4 ? (v / 1e4).toFixed(v >= 1e6 ? 0 : 1) + '萬' : fmt.int(v), label: '受益人數',
+      tipExtra: q => [tipRow('千張以上持有比例', rows[ks[q]][3] + '%'), tipRow('50 張以下持有比例', rows[ks[q]][0] + '%')] }); };
+  const hCard = card('受益人數', '集保每週股權分散表（週五公布）', hEl);
+  // 近 20 日明細
+  const recent = []; for (let k = t; k >= Math.max(0, t - 19); k--) recent.push(k);
+  const detail = tbl(['日期', ['收盤', 'r'], ['漲跌', 'r'], ['成交量', 'r'], ['外資（張）', 'r'], ['投信', 'r'], ['自營', 'r'], [BASIS[S.basis].short + '（億）', 'r'], ['受益單位增減', 'r'], ['融資增減', 'r']],
+    recent.map(k => { const dk = E.days[k], uu = etfUnits(k, i), up = k > 0 ? etfUnits(k - 1, i) : null, ds = (dk.dsf[i] || 0) + (dk.dsh[i] || 0);
+      return h('tr', null, h('td', null, fmt.fdate(E.dates[k])), h('td', { class: 'r num' }, fmt.px(dk.c[i])), pctCell(E.ret[k][i] * 100, 2), h('td', { class: 'r num' }, fmt.int(dk.vol[i])),
+        h('td', { class: 'r num ' + cls(dk.fi[i]) }, fmt.sint(dk.fi[i])), h('td', { class: 'r num ' + cls(dk.it[i]) }, fmt.sint(dk.it[i])), h('td', { class: 'r num ' + cls(ds) }, fmt.sint(ds)),
+        numCell(etfNet(k, i)), h('td', { class: 'r num ' + (uu && up ? cls(uu - up) : '') }, uu && up ? fmt.sint(uu - up) : '—'), h('td', { class: 'r num ' + cls(dk.md ? dk.md[i] : 0) }, dk.md && dk.md[i] != null ? fmt.sint(dk.md[i]) : '—')); }));
+  drawHead();
+  main.append(head, h('div', { class: 'grid g-main', style: { marginTop: '1rem' } },
+    h('div', { class: 'grid' }, card('K 線', '最多約 2 年；盤中服務開著時最後一根是今天', kl), flowCard_, card('近 20 個交易日明細', '張數；受益單位以千單位（＝張）計', detail)),
+    h('div', { class: 'grid' }, card('外資／投信／自營分項', '金額（億）與張數', partTbl), uCard, hCard)));
+  drawFlow(); drawU();
+  if (CHIPS.status === 'ready') drawHolders(); else loadChips().then(drawHolders, () => { holders.textContent = '—'; hEl.replaceChildren(h('div', { class: 'empty' }, '找不到 data/chips.js')); });
+  App.etfLive = () => { if (!head.isConnected) { App.etfLive = null; return; } drawHead(); if (liveO()) kl.refresh(); };
 }
 
 /* ================= 籌碼分布：外資持股、融資、投信／自營累計、集保股權分散 ================= */

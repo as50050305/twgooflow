@@ -41,6 +41,8 @@ LIVE_DEFAULTS = {
     "live_batch": 120,            # 每個請求查幾檔（網站上限約 150）
     "live_min_gap_sec": 1.5,      # 兩個請求之間至少間隔幾秒（不要調太小，以免被暫時封鎖）
     "live_provider": "twse_mis",  # 之後可改成券商／Fugle（預留）
+    "live_etf": True,             # 盤中也更新 ETF 報價（約多 3 個請求／分鐘）
+    "live_macro_sec": 60,         # 布蘭特原油、美元兌台幣幾秒更新一次（Yahoo Finance）；0＝不更新
 }
 # 台股盤中累計成交量的大致分布（開盤與收盤量大），用來估算「預估全日量比」
 VOL_PROFILE = [(0, 0.0), (5, 0.10), (15, 0.20), (30, 0.30), (60, 0.42), (90, 0.51), (120, 0.59), (150, 0.66),
@@ -134,6 +136,88 @@ def load_reference(days_n=25):
     return ref, files[-1] if files else ""
 
 
+def load_etf_reference(days_n=25):
+    """ETF：從 data\\days 的 etf 欄位取最近一天的名稱、市場，與 20 日均成交金額（億）"""
+    files = sorted(f[:-5] for f in os.listdir(F.DAY_DIR) if f.endswith(".json"))[-days_n:]
+    out, vals = {}, {}
+    for f in files:
+        d = F.load_json(os.path.join(F.DAY_DIR, f + ".json")) or {}
+        ef, et, names = d.get("etf_fields") or [], d.get("etf") or {}, d.get("etf_names") or {}
+        if not et:
+            continue
+        iv, ic = (ef.index("val") if "val" in ef else None), (ef.index("c") if "c" in ef else None)
+        for code, a in et.items():
+            if iv is not None and a[iv] is not None:
+                vals.setdefault(code, []).append(a[iv] / 100)
+            nm = names.get(code) or [code, "上市"]
+            out[code] = {"ex": "otc" if nm[1] == "上櫃" else "tse", "name": nm[0], "c": a[ic] if ic is not None else None}
+    for code, r in out.items():
+        v = vals.get(code, [])[-20:]
+        r["val20"] = sum(v) / len(v) if v else 0
+    return out
+
+
+# ----------------------------------------------------------------- 國際：布蘭特原油、美元兌台幣（Yahoo Finance，盤中服務開著時每分鐘更新）
+class Macro:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        ctx = ssl.create_default_context()
+        if hasattr(ssl, "VERIFY_X509_STRICT"):
+            ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
+        self.op = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+        self.data = {}
+        self.errors = 0
+
+    def fetch_one(self, sym):
+        q = urllib.parse.quote(sym)
+        last = None
+        for host in ("query1", "query2"):
+            url = f"https://{host}.finance.yahoo.com/v8/finance/chart/{q}?range=1d&interval=5m&includePrePost=false"
+            req = urllib.request.Request(url, headers={"User-Agent": F.DEFAULT_CONFIG["user_agent"], "Accept": "application/json", "Referer": "https://finance.yahoo.com/"})
+            try:
+                with self.op.open(req, timeout=15) as r:
+                    j = json.loads(r.read().decode("utf-8", errors="replace"))
+                res = ((j.get("chart") or {}).get("result") or [None])[0]
+                if not res:
+                    raise RuntimeError(((j.get("chart") or {}).get("error") or {}).get("description") or "沒有資料")
+                m = res.get("meta") or {}
+                p = m.get("regularMarketPrice")
+                if p is None:
+                    raise RuntimeError("沒有價格")
+                off = int(m.get("gmtoffset") or 0)
+                ts = res.get("timestamp") or []
+                cl = ((res.get("indicators") or {}).get("quote") or [{}])[0].get("close") or []
+                pts = [[t, round(c, 4)] for t, c in zip(ts, cl) if c is not None][-300:]
+                t = int(m.get("regularMarketTime") or time.time())
+                return {"p": round(p, 4), "prev": m.get("chartPreviousClose") or m.get("previousClose"), "t": t,
+                        "d": dt.datetime.fromtimestamp(t + off, dt.timezone.utc).strftime("%Y%m%d"),
+                        "h": m.get("regularMarketDayHigh"), "l": m.get("regularMarketDayLow"), "o": pts[0][1] if pts else None,
+                        "pts": pts, "got": int(time.time())}
+            except Exception as e:
+                last = e
+        raise RuntimeError(last)
+
+    def run(self, stop):
+        sec = float(self.cfg.get("live_macro_sec") or 0)
+        if sec <= 0:
+            return
+        syms = F.DEFAULT_CONFIG.get("macro_symbols") or {"brent": "BZ=F", "usdtwd": "TWD=X"}
+        syms = dict(syms, **(self.cfg.get("macro_symbols") or {}))
+        while not stop.is_set():
+            ok = 0
+            for key, sym in syms.items():
+                try:
+                    self.data[key] = self.fetch_one(sym)
+                    ok += 1
+                except Exception as e:
+                    self.errors += 1
+                    if self.errors in (1, 5) or self.errors % 30 == 0:
+                        log(f"  ! 油價／匯率即時更新失敗（{sym}：{e}），之後會繼續重試")
+            if ok:
+                self.errors = 0
+            stop.wait(max(20.0, sec))
+
+
 # ----------------------------------------------------------------- 證交所基本市況報導
 class Mis:
     BASE = os.environ.get("TWFLOW_MIS_BASE", "https://mis.twse.com.tw")
@@ -190,8 +274,11 @@ class Mis:
 
 # ----------------------------------------------------------------- 盤中狀態與訊號
 class Live:
-    def __init__(self, cfg, ref, ref_date):
+    def __init__(self, cfg, ref, ref_date, eref=None):
         self.cfg, self.ref, self.ref_date = cfg, ref, ref_date
+        self.eref = eref or {}  # ETF：code → {ex, name, val20}
+        self.est = {}           # ETF 即時狀態
+        self.macro = None       # Macro（油價、匯率）
         self.lock = threading.RLock()   # 可重入：同一個執行緒在鎖內再呼叫 snapshot() 也不會卡死
         self.st = {}            # code → 狀態
         self.idx = {}
@@ -224,18 +311,54 @@ class Live:
             return False
         if not ref:
             return False
+        try:
+            eref = load_etf_reference() if self.cfg.get("live_etf", True) else {}
+        except Exception:
+            eref = self.eref
         with self.lock:
             old = self.ref_date
             self.ref, self.ref_date = ref, ref_date
+            self.eref = eref or self.eref
         log(f"參考資料更新：{old} → {ref_date}（前 20 日高、均量改用最新資料），共 {len(ref)} 檔")
         return True
 
     def keys_for(self, codes):
-        return [f"{self.ref[c]['ex']}_{c}.tw" for c in codes if c in self.ref]
+        out = []
+        for c in codes:
+            r = self.ref.get(c) or self.eref.get(c)
+            if r:
+                out.append(f"{r['ex']}_{c}.tw")
+        return out
 
     def focus_codes(self):
         top = sorted(self.ref, key=lambda c: -self.ref[c]["val20"])[: self.cfg["live_focus_top"]]
-        return list(dict.fromkeys(top + [c for c in self.focus_extra if c in self.ref]))
+        return list(dict.fromkeys(top + [c for c in self.focus_extra if c in self.ref or c in self.eref]))
+
+    def all_codes(self):
+        """全部要輪詢的代號：普通股＋ETF（ETF 依 20 日均成交金額由大到小）"""
+        etfs = sorted(self.eref, key=lambda c: -(self.eref[c].get("val20") or 0)) if self.cfg.get("live_etf", True) else []
+        return list(self.ref) + [c for c in etfs if c not in self.ref]
+
+    def ingest_etf(self, c, m, now):
+        """ETF：只記價格、成交量與估算成交額（不跑雷達、不算進板塊與漲跌家數）"""
+        s = self.est.setdefault(c, {"val": 0.0})
+        v = num(m.get("v"))
+        a1 = num((m.get("a") or "").split("_")[0]) if m.get("a") else None
+        b1 = num((m.get("b") or "").split("_")[0]) if m.get("b") else None
+        zt, pz = num(m.get("z")), num(m.get("pz"))
+        mid = (a1 + b1) / 2 if a1 and b1 else (b1 or a1)
+        if zt:
+            s["zt"] = zt
+        px = zt or s.get("zt") or mid or pz or s.get("z")
+        if v is not None and px:
+            pv = s.get("v")
+            if pv is None:
+                s["val"] = v * px / 1e5          # 第一次看到：之前的成交用目前價格估
+            elif v > pv:
+                s["val"] += (v - pv) * px / 1e5
+            s["v"] = v
+        s.update({"z": px, "y": num(m.get("y")), "o": num(m.get("o")), "h": num(m.get("h")), "l": num(m.get("l")),
+                  "u": num(m.get("u")), "w": num(m.get("w")), "t": m.get("t"), "a1": a1, "b1": b1})
 
     def minutes(self, now):
         return (now.hour * 60 + now.minute + now.second / 60) - 9 * 60
@@ -263,6 +386,8 @@ class Live:
                             self.ibar.setdefault(c, [None] * 271)[k] = round(zz, 2)
                     continue
                 if c not in self.ref:
+                    if c in self.eref:
+                        self.ingest_etf(c, m, now)
                     continue
                 s = self.st.setdefault(c, {"samples": collections.deque(maxlen=120), "val": 0.0, "outer": 0.0, "inner": 0.0, "dir": 0})
                 ts = data_time(m, now)
@@ -572,6 +697,40 @@ class Live:
         self._flow_cache = (now, out)
         return out
 
+    def sector_members(self, name, m=None, k=None):
+        """板塊成分股在某一分鐘（m，0＝09:00）的主動買賣淨額與成交額（億）；k＝只算最近 k 分鐘（None＝開盤到 m）"""
+        by_code, kinds, order = self.sector_map()
+        codes = [c for c, ns in by_code.items() if name in ns]
+        N, W = self.MB_N, self.MB_W
+        rows = []
+        with self.lock:
+            for c in codes:
+                a = self.mbar.get(c)
+                s = self.st.get(c) or {}
+                r = self.ref.get(c) or {}
+                net = val = None
+                if a is not None:
+                    mm = N - 1 if m is None else max(0, min(N - 1, int(m)))
+                    j1 = next((j for j in range(mm, -1, -1) if not math.isnan(a[j * W + 4])), None)
+                    if j1 is not None:
+                        v1, o1 = a[j1 * W + 4], a[j1 * W + 5]
+                        v0 = o0 = 0.0
+                        if k:
+                            m0 = mm - int(k)
+                            j0 = next((j for j in range(m0, -1, -1) if j >= 0 and not math.isnan(a[j * W + 4])), None) if m0 >= 0 else None
+                            if j0 is not None:
+                                v0, o0 = a[j0 * W + 4], a[j0 * W + 5]
+                        val = v1 - v0
+                        net = 2 * (o1 - o0) - val
+                if net is None and not k and m is None and s.get("val"):
+                    val = s.get("val", 0.0)                       # 沒有分鐘資料（例如收盤後才啟動）：用今天累計
+                    net = 2 * s.get("outer", 0.0) - val
+                z, y = s.get("z"), s.get("y")
+                rows.append({"code": c, "name": r.get("name", c), "z": z, "chg": round((z / y - 1) * 100, 2) if z and y else None,
+                             "net": None if net is None else round(net, 3), "val": None if val is None else round(val, 3),
+                             "dayVal": round(s.get("val", 0.0), 3), "outer": round(s.get("outer", 0.0), 3)})
+        return {"name": name, "type": kinds.get(name), "m": m, "k": k, "date": self.date, "updated": self.updated, "status": status_now(self.cfg), "rows": rows}
+
     def save_flow(self):
         """板塊即時資金流存檔：data/live/flow_last.js（服務關掉後網頁也能回放今天）與 flow_日期.js（留存）"""
         if not self.mbar:
@@ -579,6 +738,9 @@ class Live:
         try:
             out = self.sector_flow()
             out = dict(out, saved=F.now_tw().strftime("%H:%M:%S"))
+            # 每檔今天到目前為止的主動買賣淨額與成交額（億）：服務關掉後，網頁點板塊還能看成分股
+            with self.lock:
+                out["stocks"] = {c: [round(2 * x.get("outer", 0.0) - x.get("val", 0.0), 3), round(x.get("val", 0.0), 3), x.get("z"), x.get("y")] for c, x in self.st.items() if x.get("val")}
             d = self.date or F.now_tw().strftime("%Y%m%d")
             body = "window.TWFLOW_FLOW=" + json.dumps(out, ensure_ascii=False, separators=(",", ":")) + ";\n"
             for name in ("flow_last.js", f"flow_{d}.js"):
@@ -646,7 +808,10 @@ class Live:
                     "status": status_now(self.cfg), "index": self.idx, "th": self.th, "requests": MIS.count if MIS else 0,
                     "cycleSec": self.cycle_sec, "lagSec": self.lag(),
                     "fields": ["z", "y", "o", "h", "l", "v", "val", "val5", "ratio5", "est", "out5", "h20", "flags", "u", "w", "t"],
-                    "stocks": stocks, "events": self.events, "ibars": {k: list(v) for k, v in self.ibar.items()}}
+                    "stocks": stocks, "events": self.events, "ibars": {k: list(v) for k, v in self.ibar.items()},
+                    "etfFields": ["z", "y", "o", "h", "l", "v", "val", "u", "w", "t"],
+                    "etfs": {c: [s.get("z"), s.get("y"), s.get("o"), s.get("h"), s.get("l"), s.get("v"), round(s.get("val", 0.0), 3), s.get("u"), s.get("w"), s.get("t")] for c, s in self.est.items()},
+                    "macro": dict(self.macro.data) if self.macro else {}}
 
 
 def status_now(cfg):
@@ -660,7 +825,7 @@ def status_now(cfg):
 
 # ----------------------------------------------------------------- 輪詢
 MIS = None
-LIVE_VERSION = 7          # 盤中服務版本：新版啟動時若發現舊版（2 以上）在跑，會請它結束後接手（v3：直接開 dashboard.html 也能連、收盤報價存檔；v4：早上補抓到新資料會自動換參考資料；v5：大盤開盤價與分時；v7：買進雷達）
+LIVE_VERSION = 8          # 盤中服務版本：新版啟動時若發現舊版（2 以上）在跑，會請它結束後接手（v3：直接開 dashboard.html 也能連、收盤報價存檔；v4：早上補抓到新資料會自動換參考資料；v5：大盤開盤價與分時；v7：買進雷達；v8：ETF、油價匯率即時、板塊成分股）
 QUIT = threading.Event()  # 收到「交棒」要求時結束整個服務
 
 
@@ -670,7 +835,7 @@ def poller(live, cfg, stop, once=False):
     global MIS
     MIS = Mis(cfg)
     MIS.warmup()
-    all_codes = list(live.ref)
+    all_codes = live.all_codes()
     B = cfg["live_batch"]
     last_focus, ptr, cycle_t0, cycles = 0.0, 0, time.time(), 0
     last_refchk = time.time()
@@ -679,7 +844,7 @@ def poller(live, cfg, stop, once=False):
         if time.time() - last_refchk >= 120:
             last_refchk = time.time()
             if live.reload_reference_if_newer():
-                all_codes = list(live.ref)
+                all_codes = live.all_codes()
         focus = live.focus_codes()
         fset = set(focus)
         rest = [c for c in all_codes if c not in fset]
@@ -770,10 +935,24 @@ def make_handler(live):
                 except ValueError:
                     since = 0
                 return self._json(live.radar_since(since))
+            if p == "/api/sector":
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                name = (q.get("name") or [""])[0]
+                try:
+                    m = int((q.get("m") or [""])[0])
+                except ValueError:
+                    m = None
+                try:
+                    k = int((q.get("k") or ["0"])[0]) or None
+                except ValueError:
+                    k = None
+                return self._json(live.sector_members(name, m, k))
+            if p == "/api/macro":
+                return self._json(live.macro.data if live.macro else {})
             if p == "/api/stock":
                 q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 code = (q.get("code") or [""])[0].strip()
-                if not F.CODE_RE.match(code):
+                if not (F.CODE_RE.match(code) or F.ETF_RE.match(code)):
                     return self._json({"error": "bad code"}, 400)
                 return self._json(live.stock_detail(code))
             if p == "/":
@@ -1063,8 +1242,18 @@ def main():
     if not ref:
         log("! 沒有參考資料，請先執行 run.bat")
         return
-    live = Live(cfg, ref, ref_date)
+    eref = {}
+    if cfg.get("live_etf", True):
+        try:
+            eref = load_etf_reference()
+        except Exception as e:
+            log(f"  ! ETF 參考資料讀取失敗（不影響個股）：{e}")
+    live = Live(cfg, ref, ref_date, eref)
+    if eref:
+        log(f"ETF 也會更新報價：{len(eref)} 檔")
     stop = threading.Event()
+    live.macro = Macro(cfg)
+    macro_stop = threading.Event()
     if a.test:
         poller(live, cfg, stop, once=True)
         snap = live.snapshot()
@@ -1091,6 +1280,7 @@ def main():
         sys.exit(3 if running else 1)
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=live.macro.run, args=(macro_stop,), daemon=True).start()
     url = f"http://localhost:{cfg['live_port']}{page_path()}"
     log(f"儀表板網址：{url}" + ("（同一個 Wi-Fi 的手機可用這台電腦的 IP 連線）" if cfg["live_lan"] else ""))
     if not a.no_browser:
@@ -1120,13 +1310,17 @@ def main():
         log("按了 Ctrl+C，盤中服務停止。要再開請雙擊 live.bat。")
     live.save_events()
     live.save_last()
-    # 收盤後保留網頁服務一段時間，方便查看當天訊號
+    # 收盤後保留網頁服務：排程開的保留 30 分鐘；自己雙擊 live.bat 開的會一直開著（油價、匯率繼續每分鐘更新），關掉視窗才停
     if not QUIT.is_set():
-        log("報價已停止；網頁服務會再保留 30 分鐘。")
+        keep = a.foreground and float(cfg.get("live_macro_sec") or 0) > 0
+        log("台股報價已停止；油價、匯率會繼續每分鐘更新，關掉這個視窗就停止。" if keep else "報價已停止；網頁服務會再保留 30 分鐘。")
+        t_end = time.time() + 1800
         try:
-            QUIT.wait(1800)
+            while not QUIT.is_set() and (keep or time.time() < t_end):
+                QUIT.wait(1)
         except KeyboardInterrupt:
-            pass
+            log("按了 Ctrl+C，網頁服務停止。")
+    macro_stop.set()
     srv.shutdown()
     srv.server_close()
 

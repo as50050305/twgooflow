@@ -9,7 +9,7 @@
   python fetch.py --rebuild       不抓資料，只用本機快取重新計算、輸出
   python fetch.py --check         顯示每天「個股估算加總 vs 官方金額總表」的誤差
 
-資料來源：臺灣證券交易所、證券櫃檯買賣中心公開資料。只用 Python 標準函式庫。
+資料來源：臺灣證券交易所、證券櫃檯買賣中心公開資料；國際行情（布蘭特原油、美元兌台幣）用 Yahoo Finance（備援 FRED）。只用 Python 標準函式庫。
 """
 import argparse
 import base64
@@ -17,6 +17,7 @@ import csv
 import gzip
 import http.client
 import datetime as dt
+import faulthandler
 import html
 import json
 import os
@@ -40,7 +41,7 @@ SECTORS_PATH = os.path.join(BASE_DIR, "sectors.csv")
 CALENDAR_PATH = os.path.join(DATA_DIR, "calendar.json")
 UNIVERSE_PATH = os.path.join(DATA_DIR, "universe.json")
 
-PARSER_VERSION = 9  # 正規化格式有變動時遞增，舊的 days\*.json 會自動重算（v8：發行股數、外資持股；v9：大盤融資餘額）
+PARSER_VERSION = 10  # 正規化格式有變動時遞增，舊的 days\*.json 會自動重算（v8：發行股數、外資持股；v9：大盤融資餘額；v10：ETF）
 
 DEFAULT_CONFIG = {
     "backfill_trading_days": 60,
@@ -65,6 +66,8 @@ DEFAULT_CONFIG = {
     "chips_weeks": 52,                # 集保股權分散保留幾週
     "taifex_base": "https://www.taifex.com.tw",
     "market_months": 25,              # 大盤／台指期頁：指數 K 線、台指期、期貨法人往回抓幾個月
+    "macro_symbols": {"brent": "BZ=F", "usdtwd": "TWD=X"},   # 國際：布蘭特原油（美元／桶）、美元兌台幣（Yahoo Finance 代號）
+    "macro_days": 520,                # 國際行情保留幾天
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
 }
 
@@ -109,6 +112,22 @@ class Log:
             print(msg.encode("ascii", "replace").decode(), flush=True)
         self.f.write(msg + "\n")
         self.f.flush()
+        watchdog()
+
+
+WATCHDOG_SEC = 20 * 60
+WATCHDOG_ON = False          # 只有 fetch.py 自己執行時開（盤中服務 live.py 也用這個 Log，不能被看門狗結束）
+
+
+def watchdog():
+    """看門狗：超過 20 分鐘沒有任何進度（沒寫紀錄、沒更新 running.lock）就把卡住的位置寫進 logs 並結束，
+    避免排程的那次執行整個早上卡在同一個請求（下次執行會接著抓）。"""
+    if not WATCHDOG_ON or log is None or getattr(log, "f", None) is None:
+        return
+    try:
+        faulthandler.dump_traceback_later(WATCHDOG_SEC, repeat=False, file=log.f, exit=True)
+    except Exception:
+        pass
 
 
 log = None
@@ -239,8 +258,8 @@ class Fetcher:
         if wait > 0:
             time.sleep(wait)
 
-    def get(self, url, referer=None, encoding="utf-8", data=None):
-        waits = list(self.cfg["retry_waits_sec"])
+    def get(self, url, referer=None, encoding="utf-8", data=None, waits=None):
+        waits = list(self.cfg["retry_waits_sec"] if waits is None else waits)
         attempt = 0
         while True:
             self._sleep()
@@ -454,6 +473,36 @@ def in_universe(uni, code, name=""):
         return True
     # 已下市（目前清單沒有）的普通股：4 碼數字代號、非 ETF（00 開頭）、非存託憑證
     return bool(re.match(r"^[1-9]\d{3}$", code)) and "-DR" not in name
+
+
+# ----------------------------------------------------------------- ETF
+ETF_RE = re.compile(r"^00\d{2,4}[A-Z]?$")     # 0050、00878、006208、00631L、00679B、00400A…（ETN、REITs 不是 00 開頭）
+ETF_FIELDS = ["o", "h", "l", "c", "chg", "vol", "vwap", "fi", "it", "dsf", "dsh", "val", "nref", "xref", "mbal", "md", "u"]
+ETF_CATS = ["市值型", "高股息", "主動式", "台股主題", "海外股票", "債券", "槓桿反向", "商品期貨", "平衡"]
+_OVERSEAS = ("美國", "美股", "日本", "日經", "東證", "中國", "滬深", "上証", "上證", "深証", "深100", "A50", "A股", "恒生", "香港", "印度", "越南", "歐洲",
+             "全球", "新興", "亞", "韓", "KOSPI", "S&P", "標普", "NASDAQ", "那斯達克", "納斯達克", "道瓊", "FANG", "費城", "MSCI A", "北美", "US", "中証", "MAG7", "世界")
+_MKTCAP = ("台灣50", "台50", "臺灣50", "市值", "臺灣加權", "台灣加權", "MSCI台灣", "中型100", "TOP50", "旗艦50", "富櫃50", "臺灣ESG永續", "台灣領袖50", "優選50", "台精彩50", "公司治理", "摩台")
+
+
+def etf_cat(code, name):
+    n = name or ""
+    if code[-1] in "LR" or "正2" in n or "反1" in n:
+        return "槓桿反向"
+    if code[-1] in "BD" or "債" in n:
+        return "債券"
+    if code[-1] == "U" or n.startswith("期") or any(k in n for k in ("黃金", "原油", "石油", "白銀", "黃豆", "銅", "美元指", "日圓")):
+        return "商品期貨"
+    if code[-1] == "T" or n.startswith("平衡"):
+        return "平衡"
+    if code[-1] == "A" or n.startswith("主動"):
+        return "主動式"
+    if "息" in n:
+        return "高股息"
+    if any(k in n for k in _OVERSEAS):
+        return "海外股票"
+    if any(k in n for k in _MKTCAP):
+        return "市值型"
+    return "台股主題"
 
 
 # ----------------------------------------------------------------- 板塊對照檔
@@ -702,6 +751,7 @@ def parse_tpex_quotes(j):
         ix = {k: f.index(k) for k in ("代號", "收盤", "漲跌", "開盤", "最高", "最低", "均價", "成交股數")}
         iv = next(i for i, x in enumerate(f) if x.startswith("成交金額"))
         inr = next((i for i, x in enumerate(f) if x.replace(" ", "").startswith("次日參考價")), None)
+        ish = next((i for i, x in enumerate(f) if x.startswith("發行股數")), None)
         for r in t.get("data") or []:
             code = str(r[ix["代號"]]).strip()
             vol = num(r[ix["成交股數"]]) or 0.0
@@ -712,6 +762,7 @@ def parse_tpex_quotes(j):
                 "c": num(r[ix["收盤"]]), "chg": num(r[ix["漲跌"]]),
                 "vol": vol, "val": val, "avg": num(r[ix["均價"]]),
                 "nref": num(r[inr]) if inr is not None else None,
+                "shr": num(r[ish]) if ish is not None and code.startswith("00") else None,
             }
     return out
 
@@ -860,6 +911,7 @@ def build_day(d, uni):
 
     xmap = exright_map().get(ymd, {})
     stocks = {}
+    etfs, etf_names = {}, {}
     extra_names = {}  # 不在目前清單（已下市）的股票名稱
     # 估算檢查：所有 T86 列（含 ETF）股數 × 均價，對照官方金額
     check = {}
@@ -873,6 +925,20 @@ def build_day(d, uni):
             if ins and vwap:
                 for k in est:
                     est[k] += ins[k] * vwap
+            if ETF_RE.match(code):
+                ie = ins or {"fi": 0, "it": 0, "dsf": 0, "dsh": 0}
+                mg = (margin or {}).get(code)
+                u = q.get("shr") or (qf[mkt].get(code) or (None, None))[0]
+                etf_names[code] = [q.get("n", code), "上市" if mkt == "TWSE" else "上櫃"]
+                etfs[code] = [
+                    r2(q["o"]), r2(q["h"]), r2(q["l"]), r2(q["c"]), r2(q["chg"]),
+                    int(round(q["vol"] / 1000)), r2(vwap) if vwap else None,
+                    int(round(ie["fi"] / 1000)), int(round(ie["it"] / 1000)), int(round(ie["dsf"] / 1000)), int(round(ie["dsh"] / 1000)),
+                    round(q["val"] / 1e6, 1), r2(q.get("nref")), r2(xmap.get(code)) if mkt == "TWSE" else None,
+                    int(mg["mbal"]) if mg else None, int(mg["md"]) if mg else None,
+                    ir(u / 1000) if u else None,                  # 受益單位（千單位，等同張）
+                ]
+                continue
             if not in_universe(uni, code, q.get("n", "")):
                 continue
             if code not in uni.get("stocks", {}):
@@ -914,6 +980,7 @@ def build_day(d, uni):
         },
         "stocks": stocks,
         "names": extra_names,
+        "etf_fields": ETF_FIELDS, "etf": etfs, "etf_names": etf_names,
     }
     save_json(os.path.join(DAY_DIR, ymd + ".json"), day, compact=True)
     return day
@@ -1194,6 +1261,166 @@ def build_history(cfg, uni):
     log(f"已輸出 data\\history.js：{len(out_days)} 個交易日（{out_days[0]['d']}～{out_days[-1]['d']}），{len(codes)} 檔，{os.path.getsize(p) / 1e6:.1f} MB（未壓縮 {len(raw) / 1e6:.0f} MB）")
 
 
+def build_etf(cfg):
+    """data\\etf.js：上市櫃 ETF 每日行情、法人買賣超、融資、受益單位（gzip + base64，打開 ETF 分頁時才載入）"""
+    try:
+        files = sorted(f[:-5] for f in os.listdir(DAY_DIR) if f.endswith(".json"))
+        files = files[-cfg.get("history_trading_days", 245):]
+        days = []
+        for f in files:
+            d = load_json(os.path.join(DAY_DIR, f + ".json"))
+            if d and d.get("etf"):
+                days.append({"date": d["date"], "fields": d["etf_fields"], "stocks": d["etf"], "names": d.get("etf_names") or {}})
+        if not days:
+            log("  ! 還沒有 ETF 資料（days 檔需要重算，下次執行會處理）")
+            return
+        names = {}
+        for d in days:
+            names.update(d["names"])
+        codes = sorted(set().union(*[set(x["stocks"]) for x in days]))
+        pos = {c: i for i, c in enumerate(codes)}
+        add_ref(days, codes, pos)
+        flds = [f for f in ETF_FIELDS if f not in ("nref", "xref")]
+        out_days = []
+        for d in days:
+            fidx = [d["fields"].index(f) if f in d["fields"] else None for f in flds]
+            cols = {f: [None] * len(codes) for f in flds + ["ref"]}
+            for code, arr in d["stocks"].items():
+                i = pos[code]
+                for f, k in zip(flds, fidx):
+                    if k is not None and k < len(arr):
+                        cols[f][i] = arr[k]
+                cols["ref"][i] = d["_ref"].get(code)
+            out_days.append({"d": d["date"], **cols})
+        last = days[-1]["stocks"]
+        out = {"generated": now_tw().isoformat(timespec="seconds"), "codes": codes,
+               "names": [names.get(c, [c, ""])[0] for c in codes],
+               "mkt": ["L" if names.get(c, ["", ""])[1] == "上市" else "O" for c in codes],
+               "cat": [etf_cat(c, names.get(c, [c])[0]) for c in codes],
+               "listed": [1 if c in last else 0 for c in codes],
+               "cats": ETF_CATS, "days": out_days}
+        raw = json.dumps(out, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        b64 = base64.b64encode(gzip.compress(raw, 9)).decode("ascii")
+        p = os.path.join(DATA_DIR, "etf.js")
+        tmp = f"{p}.{os.getpid()}.tmp"
+        lst = {"codes": [c for c in codes if c in last], "names": [names[c][0] for c in codes if c in last], "cat": [etf_cat(c, names[c][0]) for c in codes if c in last]}
+        with open(tmp, "w", encoding="ascii") as f:
+            f.write("window.TWFLOW_ETF_LIST=" + json.dumps(lst, ensure_ascii=True, separators=(",", ":")) + ";\n")   # 搜尋框用的清單（不用解壓縮）
+            f.write('window.TWFLOW_ETF_GZ="' + b64 + '";\n')
+        os.replace(tmp, p)
+        log(f"已輸出 data\\etf.js：ETF {len(last)} 檔，{len(out_days)} 個交易日（{out_days[0]['d']}～{out_days[-1]['d']}），{os.path.getsize(p) / 1e6:.1f} MB")
+    except Exception as e:
+        import traceback
+        log(f"  ! etf.js 產生失敗：{e}")
+        log(traceback.format_exc())
+
+
+# ----------------------------------------------------------------- 國際：布蘭特原油、美元兌台幣
+MACRO_DIR = os.path.join(RAW_DIR, "_macro")
+MACRO_NAMES = {"brent": "布蘭特原油", "usdtwd": "美元兌台幣"}
+FRED_IDS = {"brent": "DCOILBRENTEU", "usdtwd": "DEXTAUS"}       # 備援：美國聖路易聯準銀行（只有收盤，晚幾天）
+
+
+def yahoo_daily(fx, sym, rng):
+    """Yahoo Finance 日線：回傳 ({日期: [開, 高, 低, 收]}, 最新報價資訊)"""
+    q = urllib.parse.quote(sym)
+    last_err = None
+    for host in ("query1", "query2"):
+        url = f"https://{host}.finance.yahoo.com/v8/finance/chart/{q}?range={rng}&interval=1d&includePrePost=false"
+        try:
+            j = parse_json_body(fx.get(url, referer="https://finance.yahoo.com/", waits=[5, 15]))
+            res = ((j or {}).get("chart") or {}).get("result") or []
+            if not res:
+                last_err = ((j or {}).get("chart") or {}).get("error") or "沒有資料"
+                continue
+            r = res[0]
+            meta = r.get("meta") or {}
+            off = int(meta.get("gmtoffset") or 0)
+            qt = ((r.get("indicators") or {}).get("quote") or [{}])[0]
+            rows = {}
+            for k, ts in enumerate(r.get("timestamp") or []):
+                g = lambda f: (lambda a: a[k] if k < len(a) else None)(qt.get(f) or [])
+                c = g("close")
+                if c is None:
+                    continue
+                d = dt.datetime.fromtimestamp(ts + off, dt.timezone.utc).strftime("%Y%m%d")
+                o, hh, l = g("open"), g("high"), g("low")
+                rows[d] = [round(x, 4) if x is not None else None for x in (o, hh, l, c)]
+            info = {"price": meta.get("regularMarketPrice"), "time": meta.get("regularMarketTime"),
+                    "prev": meta.get("chartPreviousClose") if rng in ("1d", "5d") else None, "cur": meta.get("currency"), "name": meta.get("shortName")}
+            return rows, info
+        except Exception as e:
+            last_err = e
+    raise RuntimeError(f"Yahoo {sym}：{last_err}")
+
+
+def fred_daily(fx, sid):
+    text = fx.get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}", referer="https://fred.stlouisfed.org/", waits=[5, 15])
+    rows = {}
+    for r in csv_rows(text) or []:
+        if len(r) < 2 or not re.match(r"^\d{4}-\d{2}-\d{2}$", r[0].strip()):
+            continue
+        v = num(r[1])
+        if v:
+            rows[r[0].replace("-", "")] = [None, None, None, v]
+    return rows
+
+
+def fetch_macro(fx, cfg):
+    """布蘭特原油（美元／桶，ICE 近月期貨 BZ=F）與美元兌台幣（TWD=X）：每次執行更新最近 1 個月，第一次抓 2 年；失敗改用 FRED 收盤"""
+    os.makedirs(MACRO_DIR, exist_ok=True)
+    log("更新國際行情：布蘭特原油、美元兌台幣…")
+    for key, sym in (cfg.get("macro_symbols") or {}).items():
+        p = os.path.join(MACRO_DIR, key + ".json")
+        old = load_json(p, None) or {"rows": {}}
+        first = len(old.get("rows") or {}) < 200
+        try:
+            rows, info = yahoo_daily(fx, sym, "2y" if first else "1mo")
+            if len(rows) < 3:
+                raise RuntimeError("筆數太少")
+            src = "Yahoo Finance " + sym
+        except Exception as e:
+            log(f"  ! {MACRO_NAMES.get(key, key)} Yahoo 失敗（{e}），改用 FRED")
+            try:
+                rows, info, src = fred_daily(fx, FRED_IDS[key]), {}, "FRED " + FRED_IDS[key]
+            except Exception as e2:
+                log(f"  ! {MACRO_NAMES.get(key, key)} 也無法從 FRED 取得（{e2}），沿用舊資料")
+                continue
+        merged = dict(old.get("rows") or {})
+        for d, v in rows.items():
+            if src.startswith("FRED") and d in merged and merged[d][0] is not None:
+                continue                      # 已有 Yahoo 的完整 K 棒就不要用 FRED 只有收盤的覆蓋
+            merged[d] = v
+        keep = sorted(merged)[-int(cfg.get("macro_days", 520)):]
+        save_raw(p, {"rows": {d: merged[d] for d in keep}, "info": info, "src": src, "updated": now_tw().isoformat(timespec="seconds")})
+        last = keep[-1] if keep else None
+        log(f"  {MACRO_NAMES.get(key, key)} ✓ {len(keep)} 天，最新 {last} 收 {merged[last][3] if last else '—'}（{src}）")
+
+
+def build_macro(cfg):
+    """data\\macro.js：window.TWFLOW_MACRO＝{brent:{d,o,h,l,c,info}, usdtwd:{…}}"""
+    try:
+        out = {"generated": now_tw().isoformat(timespec="seconds")}
+        for key in (cfg.get("macro_symbols") or {}):
+            j = load_json(os.path.join(MACRO_DIR, key + ".json"))
+            if not j or not j.get("rows"):
+                continue
+            ds = sorted(j["rows"])
+            col = lambda k: [j["rows"][d][k] for d in ds]
+            out[key] = {"name": MACRO_NAMES.get(key, key), "src": j.get("src"), "updated": j.get("updated"), "info": j.get("info") or {},
+                        "d": ds, "o": col(0), "h": col(1), "l": col(2), "c": col(3)}
+        p = os.path.join(DATA_DIR, "macro.js")
+        with open(p + ".tmp", "w", encoding="utf-8") as f:
+            f.write("window.TWFLOW_MACRO=")
+            json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
+            f.write(";\n")
+        os.replace(p + ".tmp", p)
+        got = [MACRO_NAMES[k] + f" {len(out[k]['d'])} 天" for k in MACRO_NAMES if k in out]
+        log("已輸出 data\\macro.js：" + ("、".join(got) if got else "沒有資料"))
+    except Exception as e:
+        log(f"  ! macro.js 產生失敗：{e}")
+
+
 # ----------------------------------------------------------------- 基本面：月營收、季財報（公開資訊觀測站）
 REV_DIR = os.path.join(RAW_DIR, "_revenue")
 FIN_DIR = os.path.join(RAW_DIR, "_fin")
@@ -1208,6 +1435,7 @@ def touch_lock():
             os.utime(LOCK_PATH, None)
     except OSError:
         pass
+    watchdog()
 
 
 def html_rows(text):
@@ -1439,7 +1667,7 @@ def parse_tdcc(text):
             continue
         date = date or r[0].strip()
         code = r[1].strip()
-        if not CODE_RE.match(code):
+        if not (CODE_RE.match(code) or ETF_RE.match(code)):
             continue
         try:
             lv, people, shares = int(r[2]), int(r[3]), int(r[4])
@@ -1781,6 +2009,11 @@ def sync_mobile(cfg):
         if os.path.exists(cp):
             with open(cp, "r", encoding="ascii") as f:
                 page = page.replace("<!--CHIPS-->", "<script>" + f.read() + "</script>")
+        for name, tag, enc in (("etf.js", "<!--ETF-->", "ascii"), ("macro.js", "<!--MACRO-->", "utf-8")):
+            xp = os.path.join(DATA_DIR, name)
+            if os.path.exists(xp):
+                with open(xp, "r", encoding=enc) as f:
+                    page = page.replace(tag, "<script>" + f.read().replace("</script", "<\\/script") + "</script>")
         out = os.path.join(target, "twflow_dashboard.html")
         with open(out + ".tmp", "w", encoding="utf-8") as f:
             f.write(page)
@@ -1863,7 +2096,9 @@ def main():
     if a.check:
         check_all()
         return
+    global WATCHDOG_ON
     log = Log()
+    WATCHDOG_ON = not (a.show or a.check)
     cfg = load_config()
     os.makedirs(RAW_DIR, exist_ok=True)
     os.makedirs(DAY_DIR, exist_ok=True)
@@ -1894,10 +2129,16 @@ def main():
             fetch_tdcc(fx, cfg)
             build_chips(cfg)
             fetch_market(fx, cfg)
+            try:
+                fetch_macro(fx, cfg)
+            except Exception as e:
+                log(f"  ! 國際行情更新失敗（不影響其他資料）：{e}")
             fetch_exrights(fx, cfg, now_tw().date() - dt.timedelta(days=int(cfg.get("history_trading_days", 245) * 1.5) + 10))
             sync(cfg, fx, uni)
         build_history(cfg, uni)
+        build_etf(cfg)
         build_market(cfg)
+        build_macro(cfg)
         if a.rebuild:
             build_fund(cfg)
             build_chips(cfg)
