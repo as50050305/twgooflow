@@ -1,0 +1,45 @@
+TWFlow 台股盤後法人資金流向 — Mac 版使用說明
+（功能說明請看「使用說明.txt」，內容跟 Windows 版一樣；這份只講 Mac 不同的地方）
+
+【安裝／更新】
+  1. 先裝 Python 3（https://www.python.org/downloads/macos/ 下載安裝即可）。
+  2. 打開「終端機」（應用程式 → 工具程式 → 終端機），輸入 sh 和一個空格，
+     把這個資料夾裡的 mac_install.sh 拖進終端機視窗，按 Enter。
+  3. 依照提示回答：
+     - 要不要從 Windows 複製已經抓好的資料（可以省掉第一次 1.5～2.5 小時）：把 Windows 的 twflow 資料夾拖進來。
+     - 要不要建立自動排程（平日 18:45、21:45 抓盤後資料；08:40 開盤中服務）。
+     - 要不要現在就抓一次。
+  4. 程式會裝在你的家目錄 ~/twflow（不放 OneDrive／桌面：避免 Windows 和 Mac 同時寫同一份資料，也避免 macOS 的資料夾權限擋住排程）。
+  之後程式有新版：把新的 mac版 資料夾放好，再執行一次 mac_install.sh 就是更新（config.json、sectors.csv、data 不會被覆蓋）。
+
+【檔案（~/twflow）】
+  run.command          手動抓盤後資料（Windows 的 run.bat）
+  live.command         盤中即時：在這個視窗跑盤中服務，關掉視窗就停止（Windows 的 live.bat）
+  stop_live.command    停止盤中服務（Windows 的 stop_live.bat）
+  開啟儀表板.command   盤中服務有在跑就開 http://localhost:8765，沒有就開 dashboard.html
+  移除排程.command     移除自動排程
+  mac_install.sh       安裝／更新
+  mac/                 排程用的腳本（run_task.sh、live_task.sh、common.sh）
+  .pypath              找到的 Python 路徑（換了 Python 可以刪掉，下次會重新找）
+
+【第一次雙擊 .command 被擋？】
+  macOS 可能說「無法打開，因為來自未識別的開發者」：在檔案上按右鍵 → 打開 → 打開。
+  安裝檔已經移除隔離標記，通常不會遇到。
+
+【自動排程（launchd）】
+  tw.twflow.fetch：週一～五 18:45、21:45 執行 mac/run_task.sh（紀錄在 logs/task_console.log）
+  tw.twflow.live ：週一～五 08:40 執行 mac/live_task.sh，在背景跑盤中服務（紀錄在 logs/live_console.log），收盤後 30 分鐘自動結束
+  Mac 睡眠時錯過的排程，喚醒後會補跑；關機時錯過的不會補。
+  排程時間跟著 Mac 的時區：請到 系統設定 → 一般 → 日期與時間，時區設成台北。
+  查看：終端機輸入 launchctl list | grep twflow
+
+【連線失敗（SSL／憑證錯誤）】
+  程式會自動把 Mac 系統的根憑證匯出到 data/macos_roots.pem 使用，通常不用另外處理。
+  還是失敗的話：應用程式 → Python 3.x → 雙擊 Install Certificates.command，再試一次。
+
+【瀏覽器】
+  建議用 Chrome。Safari 直接開 dashboard.html（file://）時可能連不到盤中服務；
+  用「開啟儀表板.command」或直接開 http://localhost:8765 就沒問題。
+
+【盤中服務停不掉？】
+  雙擊 stop_live.command；還是不行就打開「活動監視器」，搜尋 Python，結束它。

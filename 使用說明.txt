@@ -166,4 +166,10 @@
   開「工作排程器」找 TWFlow（盤後）與 TWFlow_Live（盤中），確認狀態與上次執行結果；或看 logs 資料夾裡當天的紀錄。
   公司電腦若禁止建立排程，就每天收盤後手動雙擊 run.bat。
 
+【Mac 版】
+  同一份程式也可以在 Mac 上獨立執行（Mac 自己抓資料、自己跑盤中服務、自己排程）。
+  安裝：先裝 python.org 的 Python 3，打開「終端機」輸入 sh 加一個空格，把 mac_install.sh 拖進去按 Enter，會裝到 ~/twflow。
+  對照：run.bat → run.command、live.bat → live.command、stop_live.bat → stop_live.command、setup_task.bat → mac_install.sh（launchd 排程）。
+  詳細請看「使用說明（Mac）.txt」。
+
 資料來源：臺灣證券交易所、證券櫃檯買賣中心公開資料。本工具僅供個人參考，不構成投資建議。

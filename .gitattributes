@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Mac 腳本一定要 LF、Windows 批次檔用 CRLF
+*.sh text eol=lf
+*.command text eol=lf
+*.bat text eol=crlf

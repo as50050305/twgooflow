@@ -5,6 +5,9 @@ logs/
 *.tmp
 running.lock
 
+# Release 打包產生的壓縮檔（在 GitHub Actions 產生，不要上傳）
+dist/
+
 # Python 暫存
 __pycache__/
 *.pyc

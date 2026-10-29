@@ -8,6 +8,7 @@
   python fetch.py --show 2330 --date 20261007
   python fetch.py --rebuild       不抓資料，只用本機快取重新計算、輸出
   python fetch.py --check         顯示每天「個股估算加總 vs 官方金額總表」的誤差
+  （Windows 雙擊 run.bat；Mac 雙擊 run.command，或終端機 python3 fetch.py）
 
 資料來源：臺灣證券交易所、證券櫃檯買賣中心公開資料；國際行情（布蘭特原油、美元兌台幣）用 Yahoo Finance（備援 FRED）。只用 Python 標準函式庫。
 """
@@ -197,7 +198,20 @@ def save_json(path, obj, compact=False):
     os.replace(tmp, path)
 
 
+def ensure_defaults():
+    """GitHub Releases 的壓縮檔放的是 config.default.json、sectors.default.csv（更新時解壓縮覆蓋，不會蓋掉你改過的設定）；
+    第一次執行時，資料夾裡還沒有 config.json／sectors.csv 才從預設檔複製一份。"""
+    for name, dflt in (("config.json", "config.default.json"), ("sectors.csv", "sectors.default.csv")):
+        dst, src = os.path.join(BASE_DIR, name), os.path.join(BASE_DIR, dflt)
+        if not os.path.exists(dst) and os.path.exists(src):
+            try:
+                shutil.copyfile(src, dst)
+            except OSError:
+                pass
+
+
 def load_config():
+    ensure_defaults()
     cfg = dict(DEFAULT_CONFIG)
     user = load_json(CONFIG_PATH, None)
     if user is None:
@@ -239,18 +253,83 @@ def r2(x):
     return int(v) if v == int(v) else v
 
 
+# ----------------------------------------------------------------- 平台（Windows／Mac 共用同一份程式）
+IS_MAC = sys.platform == "darwin"
+_MAC_LAUNCHERS = {"run.bat": "run.command", "live.bat": "live.command", "stop_live.bat": "stop_live.command",
+                  "setup_task.bat": "mac_install.sh", "run_task.bat": "mac/run_task.sh", "live_task.bat": "mac/live_task.sh"}
+
+
+def launcher(name):
+    """訊息裡提到的啟動檔：Windows 用 .bat，Mac 用 .command（例如 launcher('run.bat') 在 Mac 是 run.command）"""
+    return _MAC_LAUNCHERS.get(name, name) if IS_MAC else name
+
+
+KILL_HINT = "在「活動監視器」結束 Python" if IS_MAC else "在工作管理員結束 pythonw.exe／python.exe"
+
+
+def macos_roots():
+    """Mac：python.org 的 Python 不使用系統的憑證庫（沒執行 Install Certificates.command 時連 https 會失敗）。
+    這裡用 /usr/bin/security 把系統根憑證匯出成 data/macos_roots.pem（30 天更新一次），回傳路徑；失敗回傳 None。"""
+    if not IS_MAC:
+        return None
+    pem = os.path.join(DATA_DIR, "macos_roots.pem")
+    try:
+        if os.path.exists(pem) and os.path.getsize(pem) > 10000 and time.time() - os.path.getmtime(pem) < 30 * 86400:
+            return pem
+        import subprocess
+        out = b""
+        for kc in ("/System/Library/Keychains/SystemRootCertificates.keychain", "/Library/Keychains/System.keychain"):
+            if os.path.exists(kc):
+                r = subprocess.run(["/usr/bin/security", "find-certificate", "-a", "-p", kc],
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+                out += r.stdout
+        if b"BEGIN CERTIFICATE" not in out:
+            return pem if os.path.exists(pem) else None
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = pem + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(out)
+        os.replace(tmp, pem)
+        return pem
+    except Exception:
+        return pem if os.path.exists(pem) else None
+
+
+_SSL_CTX = None
+
+
+def make_ssl_context():
+    """所有 https 連線共用：仍然驗證憑證。
+    Python 3.13 起預設啟用嚴格憑證檢查，證交所憑證會因此被拒 → 只關掉「嚴格模式」這個額外檢查。
+    另外加入 certifi（有裝的話）與 Mac 系統根憑證，讓 python.org 版 Python 不用另外裝憑證也能連。"""
+    global _SSL_CTX
+    if _SSL_CTX is not None:
+        return _SSL_CTX
+    ctx = ssl.create_default_context()
+    if hasattr(ssl, "VERIFY_X509_STRICT"):
+        ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    try:
+        import certifi
+        ctx.load_verify_locations(cafile=certifi.where())
+    except Exception:
+        pass
+    pem = macos_roots()
+    if pem:
+        try:
+            ctx.load_verify_locations(cafile=pem)
+        except Exception:
+            pass
+    _SSL_CTX = ctx
+    return ctx
+
+
 # ----------------------------------------------------------------- HTTP
 class Fetcher:
     def __init__(self, cfg):
         self.cfg = cfg
         self.last = 0.0
         self.count = 0
-        ctx = ssl.create_default_context()
-        # Python 3.13 起預設啟用嚴格憑證檢查，證交所憑證會因此被拒；
-        # 這裡仍然驗證憑證，只是關掉「嚴格模式」這個額外檢查。
-        if hasattr(ssl, "VERIFY_X509_STRICT"):
-            ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
-        self.ctx = ctx
+        self.ctx = make_ssl_context()
 
     def _sleep(self):
         lo, hi = self.cfg["request_interval_sec"]
@@ -1979,7 +2058,7 @@ def build_market(cfg):
 
 
 def sync_mobile(cfg):
-    target = os.path.expandvars((cfg.get("mobile_sync_dir") or "").strip())
+    target = os.path.expanduser(os.path.expandvars((cfg.get("mobile_sync_dir") or "").strip()))
     if not target:
         return
     try:

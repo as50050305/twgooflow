@@ -22,6 +22,8 @@
 - [板塊對照檔](#板塊對照檔-sectorscsv)
 - [手機觀看](#手機觀看)
 - [自動排程沒有跑？](#自動排程沒有跑)
+- [Mac 版](#mac-版)
+- [下載與發佈新版本（Releases）](#下載與發佈新版本releases)
 
 ## 第一次使用
 
@@ -177,3 +179,45 @@ py fetch.py --rebuild                     :: 改完 sectors.csv 後只重算、�
 
 - 開「工作排程器」找 `TWFlow`（盤後）與 `TWFlow_Live`（盤中），確認狀態與上次執行結果；或看 `logs` 資料夾裡當天的紀錄。
 - 公司電腦若禁止建立排程，就每天收盤後手動雙擊 `run.bat`。
+
+## Mac 版
+
+同一份程式也可以在 Mac 上獨立執行（Mac 自己抓資料、自己跑盤中服務、自己排程）。
+
+1. 先裝 [python.org](https://www.python.org/downloads/macos/) 的 Python 3。
+2. 打開「終端機」，輸入 `sh ` （後面有一個空格），把 `mac_install.sh` 拖進視窗，按 Enter。會安裝到 `~/twflow`（不放 OneDrive／桌面，避免兩台同時寫、避免 macOS 資料夾權限）。
+3. 依提示：可選擇從 Windows 複製已抓好的 `data`、建立 launchd 排程（平日 18:45／21:45 盤後、08:40 盤中）、立即抓一次。再執行一次就是更新程式（`config.json`、`sectors.csv`、`data` 不覆蓋）。
+
+| Windows | Mac |
+|---|---|
+| `run.bat` | `run.command` |
+| `live.bat` | `live.command` |
+| `stop_live.bat` | `stop_live.command` |
+| `setup_task.bat` | `mac_install.sh`（launchd：`tw.twflow.fetch`、`tw.twflow.live`） |
+| 工作管理員 | 活動監視器 |
+|  | `開啟儀表板.command`、`移除排程.command` |
+
+- Mac 的時區請設成台北（排程時間跟著 Mac 時區）。睡眠時錯過的排程喚醒後會補跑，關機錯過的不補。
+- python.org 版 Python 的憑證：程式會自動匯出 Mac 系統根憑證到 `data/macos_roots.pem` 使用；還是連不上就執行「Install Certificates.command」。
+- 建議用 Chrome；Safari 請用 `開啟儀表板.command` 或 `http://localhost:8765`。
+- 詳細請看 `使用說明（Mac）.txt`。
+
+## 下載與發佈新版本（Releases）
+
+### 下載
+
+到儲存庫右邊的 **Releases**，下載最新版：
+
+- Windows：`twflow-windows-<版本>.zip`。第一次安裝：解壓縮後雙擊 `run.bat`、`setup_task.bat`。更新：關掉盤中服務後，把檔案全部複製到原本的資料夾、選「取代」。
+- Mac：`twflow-mac-<版本>.zip`。解壓縮後在終端機 `sh ` ＋ 拖進 `mac_install.sh`（第一次安裝與更新都一樣）。
+
+壓縮檔裡的設定檔叫 `config.default.json`、`sectors.default.csv`，不會蓋掉你改過的 `config.json`、`sectors.csv`；資料夾裡還沒有時，第一次執行會自動複製一份。
+
+### 發佈新版本
+
+1. 改好程式後，在 GitHub Desktop **Commit＋Push**。
+2. GitHub 網頁 → **Actions** → 左邊 **Release** → **Run workflow** → 輸入版本（例如 `v2026.10.29`）→ **Run workflow**。
+3. 約 1 分鐘後，Releases 會出現這個版本，附上 Windows 版、Mac 版兩個壓縮檔與安裝說明。
+
+也可以推一個 `v` 開頭的 tag（GitHub Desktop：History 對 commit 按右鍵 → Create Tag → Push）自動觸發。同一個版本再跑一次會覆蓋壓縮檔。
+打包程式在 `release/build_release.py`（本機也可以執行：`py release/build_release.py v2026.10.29`，輸出在 `dist/`）；流程設定在 `.github/workflows/release.yml`。

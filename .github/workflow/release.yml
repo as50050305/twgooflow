@@ -1,0 +1,44 @@
+# 發佈 Release：打包 Windows 版、Mac 版兩個壓縮檔，放到 GitHub 的 Releases。
+# 用法一（推薦）：GitHub 網頁 → Actions → Release → Run workflow → 輸入版本（例如 v2026.10.29）→ Run。
+# 用法二：推一個 v 開頭的 tag（例如 GitHub Desktop：History 對 commit 按右鍵 → Create Tag → Push）。
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本（例如 v2026.10.29）"
+        required: true
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.event.inputs.version || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 檢查程式可以編譯
+        run: python -m py_compile fetch.py live.py
+
+      - name: 打包
+        run: python release/build_release.py "$VERSION"
+
+      - name: 發佈到 Releases
+        run: |
+          V="$VERSION"; case "$V" in v*) ;; *) V="v$V";; esac
+          if gh release view "$V" >/dev/null 2>&1; then
+            gh release upload "$V" dist/*.zip --clobber
+          else
+            gh release create "$V" dist/*.zip --title "TWFlow $V" --notes-file dist/RELEASE_NOTES.md --target "$GITHUB_SHA"
+          fi

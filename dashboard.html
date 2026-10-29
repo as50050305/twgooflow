@@ -311,6 +311,11 @@ tr.newrow td{ background:color-mix(in srgb, var(--up) 10%, transparent); animati
 <script>
 'use strict';
 /* ================= 基本工具 ================= */
+// Mac：畫面上提到的 .bat 改顯示 .command、工作管理員改成活動監視器（Windows 不變）
+const IS_MAC = /Mac/i.test(navigator.platform || '') && !/iPhone|iPad|iPod/i.test(navigator.userAgent || '') && !(navigator.maxTouchPoints > 1);
+const MAC_REPL = [[/setup_task\.bat/g, 'mac_install.sh'], [/run_task\.bat/g, 'mac/run_task.sh'], [/live_task\.bat/g, 'mac/live_task.sh'], [/([A-Za-z_]+)\.bat\b/g, '$1.command'],
+  [/pythonw\.exe[（(]或 python\.exe[）)]|pythonw\.exe／python\.exe|pythonw\.exe|python\.exe/g, 'Python'], [/工作管理員/g, '活動監視器'], [/工作排程器|Windows 排程/g, 'Mac 排程（launchd）']];
+function macText(t) { if (!IS_MAC || typeof t !== 'string' || t.indexOf('.') < 0 && t.indexOf('工作') < 0 && t.indexOf('Windows') < 0) return t; for (const [re, r] of MAC_REPL) t = t.replace(re, r); return t; }
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 function h(tag, attrs, ...kids) {
@@ -321,12 +326,12 @@ function h(tag, attrs, ...kids) {
     if (k === 'class') el.className = v;
     else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
     else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-    else if (k === 'html') el.innerHTML = v; // 只用於程式內固定字串
-    else el.setAttribute(k, v === true ? '' : v);
+    else if (k === 'html') el.innerHTML = macText(v); // 只用於程式內固定字串
+    else el.setAttribute(k, v === true ? '' : (k === 'title' ? macText(String(v)) : v));
   }
   for (const c of kids.flat(Infinity)) {
     if (c == null || c === false) continue;
-    el.appendChild(c instanceof Node ? c : document.createTextNode(String(c)));
+    el.appendChild(c instanceof Node ? c : document.createTextNode(macText(String(c))));
   }
   return el;
 }

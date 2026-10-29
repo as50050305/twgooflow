@@ -161,9 +161,7 @@ def load_etf_reference(days_n=25):
 class Macro:
     def __init__(self, cfg):
         self.cfg = cfg
-        ctx = ssl.create_default_context()
-        if hasattr(ssl, "VERIFY_X509_STRICT"):
-            ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
+        ctx = F.make_ssl_context()
         self.op = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
         self.data = {}
         self.errors = 0
@@ -225,9 +223,7 @@ class Mis:
     def __init__(self, cfg):
         self.cfg = cfg
         self.cj = http.cookiejar.CookieJar()
-        ctx = ssl.create_default_context()
-        if hasattr(ssl, "VERIFY_X509_STRICT"):
-            ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
+        ctx = F.make_ssl_context()
         self.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cj), urllib.request.HTTPSHandler(context=ctx))
         self.last = 0.0
         self.count = 0
@@ -960,7 +956,7 @@ def make_handler(live):
                 self.send_header("Location", page_path())
                 self.end_headers()
                 return
-            if p.startswith("/logs") or p.endswith(".py") or p.endswith(".bat") or "/raw/" in p:
+            if p.startswith("/logs") or p.endswith((".py", ".bat", ".command", ".sh", ".pypath", ".pem")) or "/raw/" in p or "/mac/" in p:
                 return self._json({"error": "forbidden"}, 403)
             return super().do_GET()
 
@@ -994,7 +990,7 @@ def make_handler(live):
                 # 只接受本機、而且帶自訂標頭的要求（一般網頁不能跨站送自訂標頭），用來讓新版接手
                 if self.client_address[0] != "127.0.0.1" or self.headers.get("X-TWFlow-Handoff") != "1":
                     return self._json({"error": "forbidden"}, 403)
-                log("收到停止要求（live.bat 接手或 stop_live.bat），這個盤中服務結束。")
+                log(f"收到停止要求（{F.launcher('live.bat')} 接手或 {F.launcher('stop_live.bat')}），這個盤中服務結束。")
                 live.save_events()
                 live.save_last()
                 QUIT.set()
@@ -1041,7 +1037,7 @@ def already_running(port):
         return True
     if v < 2:
         log(f"！電腦上正在跑的是舊版盤中服務（沒有個股分時功能），它不支援自動交棒。"
-            f"請在工作管理員結束 pythonw.exe／python.exe 後再開 live.bat；明天排程會自動用新版。")
+            f"請{F.KILL_HINT}後再開 {F.launcher('live.bat')}；明天排程會自動用新版。")
         return True
     log(f"發現舊版盤中服務（第 {v} 版），請它結束後由新版接手…")
     try:
@@ -1094,12 +1090,12 @@ def take_over(port):
     if v is None:
         return True
     if v < 2:
-        log("！電腦上正在跑的是很舊的盤中服務，不能自動接手：請在工作管理員結束 pythonw.exe／python.exe 後再開 live.bat。")
+        log(f"！電腦上正在跑的是很舊的盤中服務，不能自動接手：請{F.KILL_HINT}後再開 {F.launcher('live.bat')}。")
         return False
     log("發現已經有盤中服務在執行，請它結束，改由這個視窗接手…")
     if request_shutdown(port):
         return True
-    log("！原本的盤中服務沒有在 10 秒內結束，請執行 stop_live.bat 或在工作管理員結束 python 後再試。")
+    log(f"！原本的盤中服務沒有在 10 秒內結束，請執行 {F.launcher('stop_live.bat')} 或{F.KILL_HINT}後再試。")
     return False
 
 
@@ -1110,12 +1106,12 @@ def stop_service(port):
         log("目前沒有盤中服務在執行，不用停止。")
         return 0
     if v < 2:
-        log("！正在跑的是很舊的版本，不支援用這個方式停止：請在工作管理員結束 pythonw.exe／python.exe。")
+        log(f"！正在跑的是很舊的版本，不支援用這個方式停止：請{F.KILL_HINT}。")
         return 1
     if request_shutdown(port):
         log("盤中服務已停止。")
         return 0
-    log("！盤中服務沒有在 10 秒內停止，請在工作管理員結束 pythonw.exe／python.exe。")
+    log(f"！盤中服務沒有在 10 秒內停止，請{F.KILL_HINT}。")
     return 1
 
 
@@ -1240,7 +1236,7 @@ def main():
     ref, ref_date = load_reference()
     log(f"盤中服務啟動：參考資料到 {ref_date}，共 {len(ref)} 檔")
     if not ref:
-        log("! 沒有參考資料，請先執行 run.bat")
+        log(f"! 沒有參考資料，請先執行 {F.launcher('run.bat')}")
         return
     eref = {}
     if cfg.get("live_etf", True):
@@ -1307,7 +1303,7 @@ def main():
     except KeyboardInterrupt:
         stop.set()
         QUIT.set()               # 按 Ctrl+C＝整個停止（不保留網頁服務）
-        log("按了 Ctrl+C，盤中服務停止。要再開請雙擊 live.bat。")
+        log(f"按了 Ctrl+C，盤中服務停止。要再開請雙擊 {F.launcher('live.bat')}。")
     live.save_events()
     live.save_last()
     # 收盤後保留網頁服務：排程開的保留 30 分鐘；自己雙擊 live.bat 開的會一直開著（油價、匯率繼續每分鐘更新），關掉視窗才停
