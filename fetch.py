@@ -68,7 +68,10 @@ DEFAULT_CONFIG = {
     "taifex_base": "https://www.taifex.com.tw",
     "market_months": 25,              # 大盤／台指期頁：指數 K 線、台指期、期貨法人往回抓幾個月
     "macro_symbols": {"brent": "BZ=F", "usdtwd": "TWD=X"},   # 國際：布蘭特原油（美元／桶）、美元兌台幣（Yahoo Finance 代號）
-    "macro_days": 520,                # 國際行情保留幾天
+    "macro_days": 1300,               # 國際行情保留幾天（約 5 年，算得出 2 年線）
+    "index_months": 61,               # 加權、櫃買指數 K 線往回抓幾個月（約 5 年，算得出 2 年線；台指期仍是 market_months）
+    "long_per_run": 300,              # 個股／ETF 長期 K 線（Yahoo Finance 5 年）每次執行補抓幾檔；0＝不抓
+    "long_minutes": 10,               # 每次執行補抓長期 K 線最多花幾分鐘
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
 }
 
@@ -1423,8 +1426,8 @@ def yahoo_daily(fx, sym, rng):
                 if c is None:
                     continue
                 d = dt.datetime.fromtimestamp(ts + off, dt.timezone.utc).strftime("%Y%m%d")
-                o, hh, l = g("open"), g("high"), g("low")
-                rows[d] = [round(x, 4) if x is not None else None for x in (o, hh, l, c)]
+                o, hh, l, v = g("open"), g("high"), g("low"), g("volume")
+                rows[d] = [round(x, 4) if x is not None else None for x in (o, hh, l, c)] + [int(v) if v is not None else None]
             info = {"price": meta.get("regularMarketPrice"), "time": meta.get("regularMarketTime"),
                     "prev": meta.get("chartPreviousClose") if rng in ("1d", "5d") else None, "cur": meta.get("currency"), "name": meta.get("shortName")}
             return rows, info
@@ -1446,15 +1449,15 @@ def fred_daily(fx, sid):
 
 
 def fetch_macro(fx, cfg):
-    """布蘭特原油（美元／桶，ICE 近月期貨 BZ=F）與美元兌台幣（TWD=X）：每次執行更新最近 1 個月，第一次抓 2 年；失敗改用 FRED 收盤"""
+    """布蘭特原油（美元／桶，ICE 近月期貨 BZ=F）與美元兌台幣（TWD=X）：每次執行更新最近 1 個月，第一次抓 5 年；失敗改用 FRED 收盤"""
     os.makedirs(MACRO_DIR, exist_ok=True)
     log("更新國際行情：布蘭特原油、美元兌台幣…")
     for key, sym in (cfg.get("macro_symbols") or {}).items():
         p = os.path.join(MACRO_DIR, key + ".json")
         old = load_json(p, None) or {"rows": {}}
-        first = len(old.get("rows") or {}) < 200
+        first = len(old.get("rows") or {}) < 1000          # 不到約 4 年 → 補抓 5 年（2 年線要用）
         try:
-            rows, info = yahoo_daily(fx, sym, "2y" if first else "1mo")
+            rows, info = yahoo_daily(fx, sym, "5y" if first else "1mo")
             if len(rows) < 3:
                 raise RuntimeError("筆數太少")
             src = "Yahoo Finance " + sym
@@ -1865,6 +1868,128 @@ def market_items(cfg, y, m, today):
     }
 
 
+# ----------------------------------------------------------------- 長期 K 線（個股、ETF：Yahoo Finance 5 年，算半年線、年線、2 年線用）
+LONG_DIR = os.path.join(DATA_DIR, "long")
+INDEX_KEYS = ("twse_ohlc", "twse_fmt", "tpex_inx", "tpex_trd")
+
+
+def long_path(code):
+    return os.path.join(LONG_DIR, code + ".js")
+
+
+def save_long(code, rows, sym):
+    """data\\long\\代號.js：(window.TWFLOW_LONG ||= {})["代號"] = {d,o,h,l,c,v(張)}；網頁開 K 線時才載入"""
+    ds = sorted(d for d, r in rows.items() if r and r[3])
+    col = lambda k: [r2(rows[d][k]) if rows[d][k] is not None else None for d in ds]
+    out = {"d": ds, "o": col(0), "h": col(1), "l": col(2), "c": col(3),
+           "v": [ir(rows[d][4] / 1000) if len(rows[d]) > 4 and rows[d][4] is not None else None for d in ds],
+           "src": "Yahoo Finance " + sym, "got": now_tw().strftime("%Y%m%d")}
+    os.makedirs(LONG_DIR, exist_ok=True)
+    p = long_path(code)
+    tmp = f"{p}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("(window.TWFLOW_LONG=window.TWFLOW_LONG||{})[" + json.dumps(code) + "]=")
+        json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
+        f.write(";\n")
+    os.replace(tmp, p)
+    return out
+
+
+def yahoo_symbol(code, otc):
+    return code + (".TWO" if otc else ".TW")
+
+
+def fetch_long_one(fx, code, otc, rng="5y"):
+    rows, _ = yahoo_daily(fx, yahoo_symbol(code, otc), rng)
+    return save_long(code, rows, yahoo_symbol(code, otc))
+
+
+def fetch_long(cfg, uni):
+    """個股與 ETF 的 5 年日 K（Yahoo Finance）：每次執行補抓一批還沒有的（成交金額大的先抓），抓過就不再抓
+    （較近的 2 年用自己的資料，Yahoo 只補更早的部分，遇到分割會自動換算）"""
+    n_max = int(cfg.get("long_per_run", 300) or 0)
+    if n_max <= 0:
+        return 0
+    files = sorted(f[:-5] for f in os.listdir(DAY_DIR) if f.endswith(".json")) if os.path.isdir(DAY_DIR) else []
+    d = load_json(os.path.join(DAY_DIR, files[-1] + ".json")) if files else None
+    if not d:
+        return 0
+    us = uni.get("stocks", {})
+    fl, iv = d.get("fields") or [], None
+    iv = fl.index("val") if "val" in fl else None
+    cand = []
+    for code, a in (d.get("stocks") or {}).items():
+        otc = (us.get(code) or {}).get("mkt") == "上櫃" or ((d.get("names") or {}).get(code, ["", ""])[1] == "上櫃")
+        cand.append((-(a[iv] or 0) if iv is not None else 0, code, otc))
+    ef = d.get("etf_fields") or []
+    ie = ef.index("val") if "val" in ef else None
+    for code, a in (d.get("etf") or {}).items():
+        cand.append((-(a[ie] or 0) if ie is not None else 0, code, (d.get("etf_names") or {}).get(code, ["", ""])[1] == "上櫃"))
+    todo = [x for x in sorted(cand) if not os.path.exists(long_path(x[1]))]
+    if not todo:
+        return 0
+    log(f"補抓長期 K 線（Yahoo Finance 5 年，算半年線／年線／2 年線用）：還有 {len(todo)} 檔，這次最多 {min(n_max, len(todo))} 檔…")
+    fx2 = Fetcher(dict(cfg, request_interval_sec=[0.8, 1.4], retry_waits_sec=[5, 15]))
+    t0, got, fails = time.time(), 0, 0
+    budget = float(cfg.get("long_minutes", 10)) * 60
+    for k, (_, code, otc) in enumerate(todo[:n_max]):
+        if time.time() - t0 > budget:
+            log(f"  已花 {budget / 60:.0f} 分鐘，這次先到這裡（下次接著抓）")
+            break
+        touch_lock()
+        try:
+            fetch_long_one(fx2, code, otc)
+            got += 1
+            fails = 0
+        except Exception as e:
+            fails += 1
+            if "404" in str(e) or "No data" in str(e) or "沒有資料" in str(e):
+                save_long(code, {}, yahoo_symbol(code, otc))          # Yahoo 沒有這檔：留空檔，不要每次重抓
+                fails = 0
+            elif fails >= 5:
+                log(f"  ! 連續 5 檔失敗（{e}），這次先停止")
+                break
+        if (k + 1) % 50 == 0:
+            log(f"  長期 K 線：{k + 1}／{min(n_max, len(todo))}")
+    log(f"  長期 K 線：這次抓了 {got} 檔，還剩 {max(0, len(todo) - got)} 檔")
+    return got
+
+
+def fetch_index_long(fx, cfg):
+    """加權、櫃買指數往回補到 index_months 個月（market_months 以前的月份只抓指數與成交金額，抓過就不再抓）"""
+    n0, n1 = int(cfg.get("market_months", 25)), int(cfg.get("index_months", 61))
+    if n1 <= n0:
+        return 0
+    today = now_tw().date()
+    y, m = today.year, today.month
+    months = []
+    for i in range(n1):
+        if i >= n0:
+            months.append((y, m))
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    todo = [(y, m, key) for (y, m) in months for key in INDEX_KEYS if not raw_exists(os.path.join(MKT_DIR, f"{y:04d}{m:02d}_{key}.json"))]
+    if not todo:
+        return 0
+    log(f"補抓較早的加權／櫃買指數（{len(todo)} 批，算 2 年線用；只有第一次）…")
+    got, fails = 0, 0
+    for (y, m, key) in todo:
+        lab, url, data, kind, ok = market_items(cfg, y, m, today)[key]
+        touch_lock()
+        try:
+            j = parse_json_body(fx.get(url, referer=url.split("/rwd/")[0].split("/www/")[0] + "/"))
+            if j and ok(j):
+                save_raw(os.path.join(MKT_DIR, f"{y:04d}{m:02d}_{key}.json"), j)
+                got += 1
+            fails = 0
+        except Exception as e:
+            fails += 1
+            log(f"  ! {y}{m:02d} {lab} 失敗，下次再抓：{e}")
+            if fails >= 5:
+                break
+    log(f"  較早的指數資料：這次抓了 {got} 批")
+    return got
+
+
 def fetch_market(fx, cfg):
     """大盤指數 K 線、成交金額、台指期行情、期貨三大法人、大額交易人：一個月一批。
     已結束的月份抓過一次就不再抓；本月（與月初幾天的上個月）每次執行都重抓。"""
@@ -2222,6 +2347,17 @@ def main():
             build_fund(cfg)
             build_chips(cfg)
         build_dashboard_data(cfg, uni)
+        if not a.rebuild:
+            # 主要資料都好了，再慢慢補長期 K 線（失敗不影響其他）
+            try:
+                if fetch_index_long(fx, cfg):
+                    build_market(cfg)
+            except Exception as e:
+                log(f"  ! 較早的指數資料補抓失敗（不影響其他資料）：{e}")
+            try:
+                fetch_long(cfg, uni)
+            except Exception as e:
+                log(f"  ! 長期 K 線補抓失敗（不影響其他資料）：{e}")
     except KeyboardInterrupt:
         log("使用者中斷；已抓到的資料都已存檔，下次執行會接著抓。")
         finally_unlock(lock, a.rebuild)

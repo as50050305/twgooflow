@@ -12,7 +12,7 @@
   --ink:#0b0b0b; --ink-2:#52514e; --muted:#6f6d68; --grid:#e1e0d9; --axis:#c3c2b7;
   --border:rgba(11,11,11,.10); --accent:#2a78d6; --accent-ink:#1c5cab; --accent-wash:rgba(42,120,214,.10);
   --red:#d03b3b; --green:#138a36; --neutral:#c9c8c1; --warn:#b26b00;
-  --l1:#2a78d6; --l2:#eb6834; --l3:#7a4fd0;
+  --l1:#2a78d6; --l2:#eb6834; --l3:#7a4fd0; --l4:#c48a00; --l5:#c93d86; --l6:#6f6d68;
   --shadow:0 1px 2px rgba(0,0,0,.06),0 4px 16px rgba(0,0,0,.06);
   --fs:14px;
 }
@@ -23,7 +23,7 @@
     --ink:#ffffff; --ink-2:#c3c2b7; --muted:#9a988f; --grid:#2c2c2a; --axis:#45453f;
     --border:rgba(255,255,255,.10); --accent:#3987e5; --accent-ink:#86b6ef; --accent-wash:rgba(57,135,229,.16);
     --red:#ff6b66; --green:#3fcf6c; --neutral:#55554f; --warn:#f0a020;
-    --l1:#5598e7; --l2:#ef7a4a; --l3:#9d85ec;
+    --l1:#5598e7; --l2:#ef7a4a; --l3:#9d85ec; --l4:#e8b84a; --l5:#ec6aa8; --l6:#a3a29a;
     --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
   }
 }
@@ -33,7 +33,7 @@
   --ink:#ffffff; --ink-2:#c3c2b7; --muted:#9a988f; --grid:#2c2c2a; --axis:#45453f;
   --border:rgba(255,255,255,.10); --accent:#3987e5; --accent-ink:#86b6ef; --accent-wash:rgba(57,135,229,.16);
   --red:#ff6b66; --green:#3fcf6c; --neutral:#55554f; --warn:#f0a020;
-  --l1:#5598e7; --l2:#ef7a4a; --l3:#9d85ec;
+  --l1:#5598e7; --l2:#ef7a4a; --l3:#9d85ec; --l4:#e8b84a; --l5:#ec6aa8; --l6:#a3a29a;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.3);
 }
 :root[data-colors="tw"]{ --up:var(--red); --down:var(--green); }
@@ -973,6 +973,50 @@ function sparkline(vals, w = 120, hgt = 28) {
   return svg;
 }
 
+/* ---------- 均線：5／20／60 日線＋半年線（120 日）、年線（240 日）、2 年線（480 日）；週 K、月 K 自動換成對應的週數／月數 ---------- */
+const KMA = [{ n: 5, lab: '5 日線', col: 'var(--l3)' }, { n: 20, lab: '20 日線', col: 'var(--l1)' }, { n: 60, lab: '60 日線', col: 'var(--l2)' },
+  { n: 120, lab: '半年線', col: 'var(--l4)' }, { n: 240, lab: '年線', col: 'var(--l5)' }, { n: 480, lab: '2 年線', col: 'var(--l6)', dash: '6 3' }];
+function maBars(n, period) { if (n <= 60 || period === 'D') return n; return period === 'W' ? Math.round(n / 5) : Math.round(n / 20); }
+function maLab(n, period) { const o = KMA.find(x => x.n === n); if (!o) return n + ' 均'; if (n <= 60) return o.lab.replace(' 日線', period === 'W' ? ' 週均' : period === 'M' ? ' 月均' : ' 日均'); return o.lab; }
+function maChecks(K, onChange) {
+  return KMA.map(o => h('label', { class: 'chk small', title: o.n > 60 ? `${o.n} 個交易日的平均（週 K 用 ${o.n / 5} 週、月 K 用 ${o.n / 20} 個月）` : null },
+    h('input', { type: 'checkbox', checked: K.ma.includes(o.n), onchange: e => { K.ma = e.target.checked ? [...K.ma, o.n].sort((a, b) => a - b) : K.ma.filter(x => x !== o.n); saveSettings(); onChange(); } }), o.lab));
+}
+function maLegend(K) {
+  return KMA.filter(o => K.ma.includes(o.n)).map(o => h('span', null, h('i', { style: { background: o.dash ? `repeating-linear-gradient(90deg,${o.col} 0 6px,transparent 6px 9px)` : o.col } }), o.lab));
+}
+/* 個股／ETF 的長期 K 線（Yahoo Finance 5 年，data/long/代號.js）：接在自己的 2 年資料前面，遇到分割自動換算 */
+const LONG = { tried: new Map() };
+function ensureLong(code) {
+  window.TWFLOW_LONG = window.TWFLOW_LONG || {};
+  if (window.TWFLOW_LONG[code]) return Promise.resolve(true);
+  if (LONG.tried.has(code)) return LONG.tried.get(code);
+  const pr = (async () => {
+    try { await loadJs(`data/long/${encodeURIComponent(code)}.js`, ''); } catch (e) { /* 還沒抓 */ }
+    if (window.TWFLOW_LONG[code]) return true;
+    if (typeof liveUp === 'function' && liveUp()) {
+      try { const r = await fetch(`${LIVE_BASE}/api/long?code=${encodeURIComponent(code)}`, { cache: 'no-store' });
+        if (r.ok) { const j = await r.json(); if (j && j.d) { window.TWFLOW_LONG[code] = j; return true; } } } catch (e) { /* 舊版服務沒有 /api/long */ }
+    }
+    LONG.tried.delete(code);   // 之後（例如盤中服務打開、run.bat 抓到）可以再試
+    return false;
+  })();
+  LONG.tried.set(code, pr);
+  return pr;
+}
+function longPrepend(bars, code) {
+  const L = window.TWFLOW_LONG && window.TWFLOW_LONG[code];
+  if (!L || !L.d || !L.d.length || !bars.length) return bars;
+  const d0 = bars[0].d; let k = L.d.findIndex(x => x >= d0); if (k < 0) k = L.d.length;
+  let ratio = 1;
+  if (k < L.d.length && L.d[k] === d0 && L.c[k] > 0 && bars[0].c > 0) { ratio = bars[0].c / L.c[k]; if (Math.abs(ratio - 1) < 0.03) ratio = 1; }
+  const pre = [];
+  for (let q = 0; q < k; q++) { const c = L.c[q]; if (!(c > 0)) continue; const o = L.o[q] > 0 ? L.o[q] : c;
+    pre.push({ d: L.d[q], o: o * ratio, h: Math.max(L.h[q] || c, o, c) * ratio, l: Math.min(L.l[q] || c, o, c) * ratio, c: c * ratio, vol: L.v && L.v[q] ? L.v[q] / ratio : 0, inst: null, sc: null, x: { long: true } }); }
+  return pre.length ? pre.concat(bars) : bars;
+}
+function longNote(code) { const L = window.TWFLOW_LONG && window.TWFLOW_LONG[code]; return L && L.d && L.d.length ? `${fmt.fdate(L.d[0]).slice(0, 7)} 起較早的部分是 Yahoo Finance 資料（沒有法人柱）` : ''; }
+
 /* ---------- K 線圖（可縮放、拖曳；均線、成交量、法人、動能） ---------- */
 function drawKline(container, cfg) {
   // cfg: {bars:[{d,o,h,l,c,vol,inst,sc,aci,acm}], ma:[5,20,60], show:{inst,score}, thr, view:{s,e}, onPick(d), sel, label}
@@ -990,7 +1034,7 @@ function drawKline(container, cfg) {
   const X = k => pad.l + (k + 0.5 - V.s) * bw;
   const vis = []; for (let k = Math.max(0, s0); k < Math.min(NB, e0); k++) vis.push(k);
   // 均線（整段計算）
-  const MA = {}; for (const m of cfg.ma) { const a = new Array(NB).fill(null); let s = 0; for (let k = 0; k < NB; k++) { s += B[k].c; if (k >= m) s -= B[k - m].c; if (k >= m - 1) a[k] = s / m; } MA[m] = a; }
+  const MA = {}; for (const m of cfg.ma) { const p = maBars(m, cfg.period); const a = new Array(NB).fill(null); let s = 0; for (let k = 0; k < NB; k++) { s += B[k].c; if (k >= p) s -= B[k - p].c; if (k >= p - 1) a[k] = s / p; } MA[m] = a; }
   // 價格範圍
   let lo = Infinity, hi = -Infinity;
   for (const k of vis) { const b = B[k]; lo = Math.min(lo, b.l); hi = Math.max(hi, b.h); for (const m of cfg.ma) { const v = MA[m][k]; if (v != null) { lo = Math.min(lo, v); hi = Math.max(hi, v); } } for (const v of [b.aci, b.acm]) if (v != null) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }
@@ -1018,8 +1062,7 @@ function drawKline(container, cfg) {
     g.appendChild(s('rect', { x: x - cw / 2, y: y1, width: cw, height: Math.max(1, y2 - y1), fill: col, stroke: col, 'stroke-width': 1 })); }
   // 均線與均價線
   const line = (vals, col, dash) => { let d = ''; for (const k of vis) { const v = vals(k); if (v == null) { d += ' '; continue; } d += (d && !d.endsWith(' ') ? 'L' : 'M') + X(k).toFixed(1) + ',' + Y(v).toFixed(1); } if (d.trim()) g.appendChild(s('path', { d: d.replace(/ +/g, ''), fill: 'none', stroke: col, 'stroke-width': 1.4, 'stroke-dasharray': dash || null, 'stroke-linejoin': 'round' })); };
-  const maCol = { 5: 'var(--l3)', 20: 'var(--l1)', 60: 'var(--l2)' };
-  for (const m of cfg.ma) line(k => MA[m][k], maCol[m] || 'var(--muted)');
+  for (const m of cfg.ma) { const o = KMA.find(x => x.n === m) || {}; line(k => MA[m][k], o.col || 'var(--muted)', o.dash); }
   if (cfg.period === 'D') { line(k => B[k].aci, 'var(--ink-2)', '2 3'); line(k => B[k].acm, 'var(--warn)', '5 3'); }
   // 回測買賣點（日 K）：買進＝K 棒下方向上三角，賣出＝上方向下三角
   const markAt = new Map();
@@ -1072,7 +1115,7 @@ function drawKline(container, cfg) {
       cfg.noVol ? null : tipRow(cfg.volName || '成交量', b.vol == null ? '—' : cfg.volFmt ? cfg.volFmt(b.vol) : Math.round(b.vol || 0).toLocaleString('en-US') + ' 張'), b.inst != null ? tipRow(cfg.instName || '法人', cfg.instFmt ? cfg.instFmt(b.inst) : fmt.yiu(b.inst), cls(b.inst)) : null,
       ...(cfg.tipExtra ? cfg.tipExtra(b) : []),
       b.sc != null && isFinite(b.sc) ? tipRow(cfg.scoreLabel || '動能', b.sc.toFixed(1)) : null,
-      ...cfg.ma.map(m => MA[m][k] != null ? tipRow(m + ' 均', fmt.px(+MA[m][k].toFixed(2))) : null),
+      ...cfg.ma.map(m => MA[m][k] != null ? tipRow(maLab(m, cfg.period), fmt.px(+MA[m][k].toFixed(2))) : null),
       ...(markAt.get(k) || []).map(m => tipRow(m.type === 'buy' ? '回測買進' : '回測賣出', m.label || '', m.type === 'buy' ? 'up' : 'down'))]); };
   const st = container._kz || (container._kz = { ptrs: new Map(), drag: null, moved: false });
   Object.assign(st, { svg, W, H, iw, pad, zoomAt, setRange, redraw, toSvg, V, showAt, hide: () => { cross.setAttribute('opacity', 0); hideTip(tip); }, pick: px => { const b = B[bar(px)]; if (b && cfg.onPick) cfg.onPick(b.d); } });
@@ -1996,7 +2039,7 @@ function viewStock(main) {
     h('div', { class: 'grid g-main', style: { marginTop: '1rem' } },
       h('div', { class: 'grid' },
         stockLiveCard(M.codes[i]),
-        card('K 線', '最多約 2 年', kl, avgInfo()),
+        card('K 線', '最多約 5 年；均線可加半年線、年線、2 年線', kl, avgInfo()),
         chipCard(i),
         card('每日法人淨額', BASIS[M.basis].name + '（億）', flowEl),
         card('融資融券', '融資使用率＝融資餘額 ÷ 融資限額；券資比＝融券餘額 ÷ 融資餘額', mgKv, mgEl),
@@ -3154,10 +3197,10 @@ function klineAgg(bars, period) {
 function klineCard(code, opts) {
   const K = S.k; const box = h('div'), chart = h('div'), zoom = h('div', { class: 'zoomctl inline', role: 'group', 'aria-label': '縮放' });
   let bars = null, view = null;
-  const ranges = { D: [['22', '1 月'], ['66', '3 月'], ['130', '半年'], ['250', '1 年'], ['all', '全部']], W: [['26', '半年'], ['52', '1 年'], ['all', '全部']], M: [['all', '全部']] };
+  const ranges = { D: [['22', '1 月'], ['66', '3 月'], ['130', '半年'], ['250', '1 年'], ['490', '2 年'], ['all', '全部']], W: [['26', '半年'], ['52', '1 年'], ['104', '2 年'], ['all', '全部']], M: [['24', '2 年'], ['all', '全部']] };
   const defRange = { D: 66, W: 52, M: 'all' };
   const setRange = r => { const n = bars.length; const len = r === 'all' ? n : Math.min(n, +r); view = { s: n - len, e: n }; };
-  const build = () => { const d = klineDaily(code); bars = d ? klineAgg(d, K.period) : []; setRange(K.period === 'D' ? (opts.range || K.range || defRange.D) : defRange[K.period]); };
+  const build = () => { const d = klineDaily(code); bars = d ? klineAgg(longPrepend(d, code), K.period) : []; setRange(K.period === 'D' ? (opts.range || K.range || defRange.D) : defRange[K.period]); };
   const draw = () => {
     if (!bars.length) { chart.replaceChildren(h('div', { class: 'empty' }, '沒有歷史資料')); return; }
     drawKline(chart, { bars, ma: K.ma, show: { inst: K.inst, score: K.score }, thr: MS.thr, view, period: K.period, zoomBox: zoom, sel: opts.sel && opts.sel(), label: code,
@@ -3166,17 +3209,21 @@ function klineCard(code, opts) {
   const toolbar = () => h('div', { class: 'row', style: { marginBottom: '.5rem', alignItems: 'center' } },
     seg([['D', '日 K'], ['W', '週 K'], ['M', '月 K']], K.period, v => { K.period = v; saveSettings(); build(); render_(); }),
     seg(ranges[K.period], String(K.period === 'D' ? (opts.range || K.range || defRange.D) : defRange[K.period]), v => { if (K.period === 'D') { if (opts.range) opts.range = v === 'all' ? 'all' : +v; else { K.range = v === 'all' ? 'all' : +v; saveSettings(); } } else defRange[K.period] = v === 'all' ? 'all' : +v; setRange(v === 'all' ? 'all' : +v); render_(); }),
-    ...[5, 20, 60].map(m => h('label', { class: 'chk small' }, h('input', { type: 'checkbox', checked: K.ma.includes(m), onchange: e => { K.ma = e.target.checked ? [...K.ma, m].sort((a, b) => a - b) : K.ma.filter(x => x !== m); saveSettings(); draw(); } }), m + ' 日線')),
+    ...maChecks(K, () => { draw(); legendBox.replaceChildren(legend()); }),
     h('label', { class: 'chk small' }, h('input', { type: 'checkbox', checked: K.inst, onchange: e => { K.inst = e.target.checked; saveSettings(); draw(); } }), '法人'),
     h('label', { class: 'chk small' }, h('input', { type: 'checkbox', checked: K.score, onchange: e => { K.score = e.target.checked; saveSettings(); draw(); } }), '動能'),
     zoom);
+  const legendBox = h('div');
   const legend = () => h('div', { class: 'legend', style: { marginTop: '.4rem' } },
-    h('span', null, h('i', { style: { background: 'var(--l3)' } }), '5 日線'), h('span', null, h('i', { style: { background: 'var(--l1)' } }), '20 日線'), h('span', null, h('i', { style: { background: 'var(--l2)' } }), '60 日線'),
+    ...maLegend(K),
     K.period === 'D' ? h('span', null, h('i', { style: { background: 'repeating-linear-gradient(90deg,var(--ink-2) 0 2px,transparent 2px 5px)' } }), '法人 20 日均價') : null,
     K.period === 'D' ? h('span', null, h('i', { style: { background: 'repeating-linear-gradient(90deg,var(--warn) 0 5px,transparent 5px 8px)' } }), '融資 20 日均價') : null,
-    h('span', { class: 'tiny muted' }, `動能線虛線＝門檻 ${MS.thr}；法人柱依目前口徑（${BASIS[S.basis].short}）`));
-  const render_ = () => { box.replaceChildren(toolbar(), chart, legend(), h('div', { class: 'tiny muted', style: { marginTop: '.3rem' } }, '滑鼠滾輪或雙擊縮放、拖曳左右移動；手機兩指縮放、單指拖曳。點 K 棒可在下方查看那一天（近 60 個交易日內）。')); draw(); };
-  const start = () => { build(); render_(); };
+    h('span', { class: 'tiny muted' }, `動能線虛線＝門檻 ${MS.thr}；法人柱依目前口徑（${BASIS[S.basis].short}）`), longNote(code) ? h('span', { class: 'tiny muted' }, longNote(code)) : null);
+  const render_ = () => { legendBox.replaceChildren(legend()); box.replaceChildren(toolbar(), chart, legendBox, h('div', { class: 'tiny muted', style: { marginTop: '.3rem' } }, '滑鼠滾輪或雙擊縮放、拖曳左右移動；手機兩指縮放、單指拖曳。點 K 棒可在下方查看那一天（近 60 個交易日內）。')); draw(); };
+  const start = () => { build(); render_();
+    // 長期資料（半年線、年線、2 年線需要更早的 K 棒）：有就接上去，沒有而盤中服務開著就現在抓
+    ensureLong(code).then(ok => { if (ok && box.isConnected && !longDone) { longDone = true; build(); render_(); } }); };
+  let longDone = false;
   if (MOMDATA.status === 'ready') start();
   else { box.replaceChildren(h('div', { class: 'empty' }, '正在載入 2 年歷史資料…')); loadHistory().then(start).catch(e => box.replaceChildren(h('div', { class: 'empty' }, '還不能顯示 K 線：' + e.message))); }
   box.redraw = () => { if (bars) draw(); };
@@ -3715,9 +3762,11 @@ function viewMarket(main) {
 /* ---------- 共用：通用 K 線卡 ---------- */
 function mkKlineCard(getBars, o) {
   const K = App.mkK, box = h('div'), chart = h('div'), zoom = h('div', { class: 'zoomctl inline', role: 'group', 'aria-label': '縮放' });
-  const ranges = { D: [['66', '3 月'], ['130', '半年'], ['250', '1 年'], ['all', '全部']], W: [['52', '1 年'], ['all', '全部']], M: [['all', '全部']] };
+  const ranges = { D: [['66', '3 月'], ['130', '半年'], ['250', '1 年'], ['490', '2 年'], ['all', '全部']], W: [['52', '1 年'], ['104', '2 年'], ['all', '全部']], M: [['24', '2 年'], ['all', '全部']] };
   let bars = [], view = null;
-  const build = () => { bars = klineAgg(getBars(), K.period); const r = K.period === 'D' ? K.range : K.period === 'W' ? 52 : 'all'; const n = bars.length, len = r === 'all' ? n : Math.min(n, +r); view = { s: n - len, e: n }; };
+  const rv = () => K.period === 'D' ? K.range : K.period === 'W' ? (K.wRange || 52) : (K.mRange || 'all');
+  const gb = () => { const b = getBars(); return o.longCode ? longPrepend(b, o.longCode) : b; };
+  const build = () => { bars = klineAgg(gb(), K.period); const r = rv(); const n = bars.length, len = r === 'all' ? n : Math.min(n, +r); view = { s: n - len, e: n }; };
   const draw = () => {
     if (!bars.length) { chart.replaceChildren(h('div', { class: 'empty' }, '還沒有資料（下次 run.bat 執行後會補）')); return; }
     drawKline(chart, { bars, ma: S.k.ma, show: { inst: S.k.inst && o.inst !== false, score: false }, thr: 0, view, period: K.period, zoomBox: zoom, label: o.label, noVol: o.noVol,
@@ -3725,15 +3774,16 @@ function mkKlineCard(getBars, o) {
   };
   const toolbar = () => h('div', { class: 'row', style: { marginBottom: '.5rem', alignItems: 'center' } },
     seg([['D', '日 K'], ['W', '週 K'], ['M', '月 K']], K.period, v => { K.period = v; build(); render_(); }),
-    K.period !== 'M' ? seg(ranges[K.period], String(K.period === 'D' ? K.range : 52), v => { if (K.period === 'D') K.range = v === 'all' ? 'all' : +v; build(); if (K.period === 'W' && v !== 'all') view.s = Math.max(0, view.e - +v); if (K.period === 'W' && v === 'all') view.s = 0; render_(); }) : null,
-    ...[5, 20, 60].map(m => h('label', { class: 'chk small' }, h('input', { type: 'checkbox', checked: S.k.ma.includes(m), onchange: e => { S.k.ma = e.target.checked ? [...S.k.ma, m].sort((a, b) => a - b) : S.k.ma.filter(x => x !== m); saveSettings(); draw(); } }), m + ' 日線')),
+    seg(ranges[K.period], String(rv()), v => { const x = v === 'all' ? 'all' : +v; if (K.period === 'D') K.range = x; else if (K.period === 'W') K.wRange = x; else K.mRange = x; build(); render_(); }),
+    ...maChecks(S.k, () => render_()),
     o.inst !== false ? h('label', { class: 'chk small' }, h('input', { type: 'checkbox', checked: S.k.inst, onchange: e => { S.k.inst = e.target.checked; saveSettings(); draw(); } }), o.instToggle || '法人') : null,
     ...(o.tools ? o.tools(() => { build(); render_(); }) : []), zoom);
   const render_ = () => { box.replaceChildren(toolbar(), chart, h('div', { class: 'legend', style: { marginTop: '.4rem' } },
-    h('span', null, h('i', { style: { background: 'var(--l3)' } }), '5 日線'), h('span', null, h('i', { style: { background: 'var(--l1)' } }), '20 日線'), h('span', null, h('i', { style: { background: 'var(--l2)' } }), '60 日線'),
-    o.note ? h('span', { class: 'tiny muted' }, o.note) : null),
+    ...maLegend(S.k),
+    o.note ? h('span', { class: 'tiny muted' }, o.note) : null, o.longCode && longNote(o.longCode) ? h('span', { class: 'tiny muted' }, longNote(o.longCode)) : null),
     h('div', { class: 'tiny muted', style: { marginTop: '.3rem' } }, '滑鼠滾輪或雙擊縮放、拖曳左右移動；手機兩指縮放、單指拖曳。')); if (box.isConnected) draw(); else requestAnimationFrame(draw); };
   build(); render_();
+  if (o.longCode) ensureLong(o.longCode).then(ok => { if (ok && box.isConnected) { build(); render_(); } });
   box.redraw = () => draw();
   // 盤中新報價：重新取資料（最後一根會變），縮放位置不變
   box.refresh = () => { const n0 = bars.length, v0 = view ? { ...view } : null; build(); if (v0 && bars.length === n0) view = v0; else if (v0 && bars.length === n0 + 1 && v0.e >= n0) view = { s: v0.s + 1, e: v0.e + 1 }; if (box.isConnected) draw(); };
@@ -4289,7 +4339,7 @@ function viewEtfOne(main, code) {
     const o = liveO(), L = o ? etfSnap() : null;
     if (o && L && L.date) out.push({ d: L.date, o: o.o || o.z, h: Math.max(o.h || o.z, o.z), l: Math.min(o.l || o.z, o.z), c: o.z, vol: o.v || 0, inst: null, live: true, x: { live: true } });
     return out; };
-  const kl = mkKlineCard(bars, { label: name, volUnit: '張', volName: '成交量', volFmt: v => fmt.int(v) + ' 張', instLabel: BASIS[S.basis].short + '（億）', instName: BASIS[S.basis].short, instFmt: v => fmt.yiu(v), instToggle: '法人',
+  const kl = mkKlineCard(bars, { label: name, longCode: code, volUnit: '張', volName: '成交量', volFmt: v => fmt.int(v) + ' 張', instLabel: BASIS[S.basis].short + '（億）', instName: BASIS[S.basis].short, instFmt: v => fmt.yiu(v), instToggle: '法人',
     tipExtra: b => [b.x && b.x.u ? tipRow('受益單位', (b.x.u / 1e5).toFixed(2) + ' 億') : null, b.x && b.x.live ? tipRow('今天', '盤中暫定') : null], note: 'K 線價格未還原配息（漲跌幅有含）。' });
   // 每日法人
   const flowEl = h('div', { class: 'chart' }); App.etfN = App.etfN || 60;
@@ -4334,7 +4384,7 @@ function viewEtfOne(main, code) {
         numCell(etfNet(k, i)), h('td', { class: 'r num ' + (uu && up ? cls(uu - up) : '') }, uu && up ? fmt.sint(uu - up) : '—'), h('td', { class: 'r num ' + cls(dk.md ? dk.md[i] : 0) }, dk.md && dk.md[i] != null ? fmt.sint(dk.md[i]) : '—')); }));
   drawHead();
   main.append(head, h('div', { class: 'grid g-main', style: { marginTop: '1rem' } },
-    h('div', { class: 'grid' }, card('K 線', '最多約 2 年；盤中服務開著時最後一根是今天', kl), flowCard_, card('近 20 個交易日明細', '張數；受益單位以千單位（＝張）計', detail)),
+    h('div', { class: 'grid' }, card('K 線', '最多約 5 年；盤中服務開著時最後一根是今天', kl), flowCard_, card('近 20 個交易日明細', '張數；受益單位以千單位（＝張）計', detail)),
     h('div', { class: 'grid' }, card('外資／投信／自營分項', '金額（億）與張數', partTbl), uCard, hCard)));
   drawFlow(); drawU();
   if (CHIPS.status === 'ready') drawHolders(); else loadChips().then(drawHolders, () => { holders.textContent = '—'; hEl.replaceChildren(h('div', { class: 'empty' }, '找不到 data/chips.js')); });

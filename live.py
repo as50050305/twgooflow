@@ -943,6 +943,23 @@ def make_handler(live):
                 except ValueError:
                     k = None
                 return self._json(live.sector_members(name, m, k))
+            if p == "/api/long":
+                # 個股／ETF 的 5 年日 K：已經有檔案就直接給；沒有就現在去 Yahoo 抓（抓一次存起來，之後 run.bat 不會再抓）
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                code = (q.get("code") or [""])[0].strip()
+                if not (F.CODE_RE.match(code) or F.ETF_RE.match(code)):
+                    return self._json({"error": "bad code"}, 400)
+                lp = F.long_path(code)
+                try:
+                    if os.path.exists(lp):
+                        with open(lp, "r", encoding="utf-8") as f:
+                            txt = f.read()
+                        return self._json(json.loads(txt[txt.index("]=") + 2:].rstrip().rstrip(";")))
+                    r = live.ref.get(code) or live.eref.get(code) or {}
+                    fx = F.Fetcher(dict(live.cfg, request_interval_sec=[0.0, 0.1], retry_waits_sec=[3]))
+                    return self._json(F.fetch_long_one(fx, code, r.get("ex") == "otc"))
+                except Exception as e:
+                    return self._json({"error": str(e)}, 502)
             if p == "/api/macro":
                 return self._json(live.macro.data if live.macro else {})
             if p == "/api/stock":
