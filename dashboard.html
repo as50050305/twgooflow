@@ -1162,6 +1162,7 @@ const MOM_FIELDS = {
   fi5: { label: '外資近 5 日', unit: '億', d: 2 }, it5: { label: '投信近 5 日', unit: '億', d: 2 },
   fiStreak: { label: '外資連買天數（負＝連賣）', unit: '天', d: 0 },
   itBuyDays3: { label: '投信近 3 日買超天數', unit: '天', d: 0 },
+  itBuyPrev2: { label: '投信前 2 日買超天數（不含當日）', unit: '天', d: 0 },
   fiFirstBuy: { label: '外資買超第一天', unit: '是/否', flag: true },
   fiOrItBuy: { label: '外資或投信當日買超', unit: '是/否', flag: true },
   nearH40: { label: '距前 40 日最高價', unit: '%', d: 1 },
@@ -1187,7 +1188,12 @@ const MOM_BUILTIN = () => [
     conds: [{ f: 'breakH20', op: 'is' }, { f: 'valRatio', op: '>=', v: 2.5 }, { f: 'val', op: '>=', v: 5 }, { f: 'instAmt', op: '>=', v: 1 }] },
   { id: 's5', name: '法人確認突破', builtin: true, desc: '收盤創 20 日新高、量比放大，外資或投信買超',
     conds: [{ f: 'newHigh20', op: 'is' }, { f: 'vr', op: '>=', v: 1.5 }, { f: 'fiOrItBuy', op: 'is' }] },
+  { id: 's7', name: '動能＋投信', builtin: true, hot: true, desc: '動能達標、成交金額大，而且投信近 3 日有買超（2026-11 回測：有投信買的平均報酬明顯高於沒有的）',
+    conds: [{ f: 'score', op: '>=', v: 'T' }, { f: 'val', op: '>=', v: 5 }, { f: 'itBuyDays3', op: '>=', v: 1 }] },
+  { id: 's8', name: '尾盤新上榜＋投信', builtin: true, hot: true, desc: '今天動能第一天達標、成交金額大，投信前 2 日有買超。盤中也算得出來（不需要今天的法人資料），用來在尾盤先看到隔天才會上榜的股票',
+    conds: [{ f: 'score', op: '>=', v: 'T' }, { f: 'streak', op: '<=', v: 1 }, { f: 'val', op: '>=', v: 5 }, { f: 'itBuyPrev2', op: '>=', v: 1 }] },
 ];
+const MOM_SORT_VAL = new Set(['s7', 's8']);   // 這些策略預設依成交金額排序
 const MOM_DEFAULTS = () => ({
   w: { r5: 0.20, r10: 0.20, r20: 0.25, bias: 0.20, vr: 0.15 },
   defVer: 3, scoreMode: 'bias', biasN: 12, thrBy: { bias: 7.5, rank: 8 },
@@ -1421,6 +1427,7 @@ function fval(f, t, i) {
     case 'it5': { let s = 0; for (let k = Math.max(0, t - 4); k <= t; k++) s += X.it[k][i]; return s; }
     case 'fiStreak': { const v0 = X.fiSh[t][i]; if (!v0) return 0; const sg = Math.sign(v0); let n = 0; for (let k = t; k >= 0; k--) { const v = X.fiSh[k][i]; if (!v || Math.sign(v) !== sg) break; n++; } return sg * n; }
     case 'itBuyDays3': { let n = 0; for (let k = Math.max(0, t - 2); k <= t; k++) if (X.itSh[k][i] > 0) n++; return n; }
+    case 'itBuyPrev2': { let n = 0; for (let k = Math.max(0, t - 2); k < t; k++) if (X.itSh[k][i] > 0) n++; return n; }
     case 'fiFirstBuy': return (X.fiSh[t][i] > 0 && t > 0 && !(X.fiSh[t - 1][i] > 0)) ? 1 : 0;
     case 'fiOrItBuy': return (X.fiSh[t][i] > 0 || X.itSh[t][i] > 0) ? 1 : 0;
     case 'nearH40': return X.h40[t][i] > 0 ? (X.A[t][i] / X.h40[t][i] - 1) * 100 : NaN;
@@ -2386,7 +2393,7 @@ function momPick(main, t) {
     if (F.q) rows = rows.filter(r => r.code.includes(F.q) || r.name.includes(F.q) || (X.ind[r.i] || '').includes(F.q));
     const nHot = rows.filter(r => r.hot).length;
     App.redrawPick = draw;
-    tableBox.replaceChildren(sortTable('pick_' + st.id, momStockCols(t), rows, { k: 'score', dir: 'desc' },
+    tableBox.replaceChildren(sortTable('pick_' + st.id, momStockCols(t), rows, { k: MOM_SORT_VAL.has(st.id) ? 'val' : 'score', dir: 'desc' },
       { pre: st.hot ? r => (r.hot ? 1 : 0) : null, redraw: draw, onRow: r => goStockX(r.code), rowClass: r => r.hot ? 'hotrow' : '' }),
       st.hot && nHot ? h('div', { class: 'tiny muted', style: { marginTop: '.4rem' } }, `${nHot} 檔標為過熱（5 日漲幅 ≥ ${MS.hotR5}% 或乖離 ≥ ${MS.hotBias}%），排在清單最後。`) : null);
   };
@@ -2923,6 +2930,28 @@ function drawLive(box) {
   const drawWatch = () => watchBox.replaceChildren(sortTable('live_watch', [...liveCols(), { k: 'stop', label: '停損價', r: 1, v: r => r.stop, cell: r => h('td', { class: 'r num ' + (r.broke ? 'down' : '') }, r.stop ? fmt.px(+r.stop.toFixed(2)) + (r.broke ? ' 跌破' : '') : '') }],
     wrows, { k: 'chg', dir: 'desc' }, { redraw: drawWatch, onRow: r => goStockX(r.code), empty: '還沒有自選股，或自選股不在掃描範圍內。' }));
   drawNear(); drawHot(); drawWatch();
+  // 尾盤清單：今天預估新上榜＋投信前 2 日有買（用盤中暫定動能）
+  const tailBox = h('div');
+  const tailSt = MS.strategies.find(s => s.id === 's8') || MOM_BUILTIN().find(s => s.id === 's8');
+  const drawTail = () => {
+    if (!mom) { tailBox.replaceChildren(h('div', { class: 'empty' }, MOMDATA.status === 'error' ? '歷史資料載入失敗，這張表算不出來。' : '正在載入歷史資料…')); return; }
+    if (!LIVEMOM.X) { tailBox.replaceChildren(h('div', { class: 'empty' }, d.date && LIVEMOM.base && d.date <= LIVEMOM.base.dates[LIVEMOM.base.T - 1] ? '今天的收盤資料已經進來了，請看「動能 → 選股清單 → 尾盤新上榜＋投信」。' : `還在等全市場掃完一輪（目前 ${LIVEMOM.n}／${LIVEMOM.need} 檔），約 1 分鐘後出現。`)); return; }
+    const rows = withLiveX(() => { const t = X.T - 1; return strategyHits(tailSt, t).map(i => { const r = momRow(t, i);
+      r.y = t > 0 ? X.score[t - 1][i] : NaN; r.itp = (t > 0 ? X.it[t - 1][i] : 0) + (t > 1 ? X.it[t - 2][i] : 0); r.hot = isHot(t, i); return r; }); });
+    tailBox.replaceChildren(sortTable('live_tail', [
+      { k: 'name', label: '股票', v: r => r.code, cell: r => h('td', null, h('span', { class: 'stk' }, h('span', { class: 'code' }, r.code), r.name), r.hot ? h('span', { class: 'tag warn' }, '過熱') : null, wset.has(r.code) ? h('span', { class: 'tag' }, '自選') : null) },
+      { k: 'score', label: '暫定動能', r: 1, v: r => r.score, f: v => isNaN(v) ? '—' : v.toFixed(1) },
+      { k: 'y', label: '昨日動能', r: 1, v: r => r.y, f: v => isNaN(v) ? '—' : v.toFixed(1) },
+      { k: 'c', label: '現價', r: 1, v: r => r.c, f: v => fmt.px(v) },
+      { k: 'chg', label: '漲跌', r: 1, v: r => r.chg, cell: r => pctCell(r.chg, 2) },
+      { k: 'r5', label: '5 日', r: 1, v: r => r.r5, cell: r => pctCell(r.r5) },
+      { k: 'vr', label: '預估量比', r: 1, v: r => r.vr, f: v => isNaN(v) ? '—' : v.toFixed(2) },
+      { k: 'val', label: '預估成交（億）', r: 1, v: r => r.val, f: v => v.toFixed(1) },
+      { k: 'itp', label: '投信前 2 日合計（億）', r: 1, v: r => r.itp, cell: r => numCell(r.itp) },
+      { k: 'add', label: '', v: () => 0, cell: r => h('td', null, addWatchBtn(r.code)) },
+    ], rows, { k: 'val', dir: 'desc' }, { redraw: drawTail, onRow: r => goStockX(r.code), rowClass: r => r.hot ? 'hotrow' : '', empty: d.status === 'pre' ? '還沒開盤' : '目前沒有符合的股票' }));
+  };
+  drawTail();
   // 板塊即時
   const p = liveProg();
   const secRows = M.sectors.filter(sc => sc.m.length >= 3 && visibleSector(sc)).map(sc => {
@@ -2949,6 +2978,10 @@ function drawLive(box) {
       h('div', { class: 'tile' }, h('div', { class: 'lab' }, '大筆資金突破'), h('div', { class: 'val num' }, evs.length + ' 檔'), h('div', { class: 'tiny ink2' }, nowNew.length ? `${nowNew.length} 檔是剛觸發的` : ''))),
     h('div', { style: { height: '1rem' } }),
     liveRadarEl(),
+    h('div', { style: { height: '1rem' } }),
+    card('尾盤清單：預估新上榜＋投信', '今天收盤預估會第一天達標、投信前 2 日有買的股票', h('div', { class: 'small ink2', style: { marginBottom: '.4rem' } },
+      '條件：', tailSt.conds.map((c, k) => [k ? '、' : '', condText(c)]), '。現價當收盤、成交金額用預估全日量，約 60 秒重算一次。'), tailBox,
+      h('div', { class: 'tiny muted', style: { marginTop: '.4rem' } }, '用途：動能第一天達標的股票，隔天開盤平均已經跳高約 1%（2026-11 回測），這張表讓你在收盤前先看到。越接近收盤越準，建議 13:00 以後再看；早盤的預估量誤差大，名單會一直變。投信今天有沒有買要晚上才知道，所以只看前 2 日。「尾盤進場」本身還沒有回測過。')),
     h('div', { style: { height: '1rem' } }),
     liveRiverEl(),
     h('div', { style: { height: '1rem' } }),
